@@ -9,7 +9,7 @@ description = "CLI tool to scrape Indeed for a personal job search"
 authors = [
     {name = "jitumaatgit"}
 ]
-readme = "../README.md"
+readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 keywords = ["jobs", "scraping", "cli", "indeed"]
