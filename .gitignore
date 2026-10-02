@@ -1,38 +1,15 @@
 # Python
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# Virtual Environment
+.venv/
 venv/
-env/
-ENV/
+*.egg-info/
+build/
+dist/
 
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# Project specific
+# Scraped job output — regenerated per run, never committed
 data/
-*.csv
+.scratch/fork-assessment/out/
+
+# Local env
 .env
-**my_jobs

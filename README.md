@@ -1,99 +1,61 @@
-# `jobsparser`
+# jobsparser (personal fork)
 
-A simple CLI tool to scrape jobs from multiple job sites (LinkedIn, Indeed, Google).
+A personal job-search CLI: scrapes **Indeed** for hand-written boolean search queries
+and writes CSV for a Google Sheets review pipeline.
 
-![WindowsTerminal_ItCx4KSla3](https://github.com/user-attachments/assets/7faed086-7eb3-4978-a175-e2b9df3c0cdc)
+This is a fork of [FranciscoMoretti/jobsparser](https://github.com/FranciscoMoretti/jobsparser),
+narrowed to one site and pointed at a maintained scraping library. See
+[ADR-0001](docs/adr/0001-adopt-upstream-jobspy.md) for why, and
+[CONTEXT.md](CONTEXT.md) for terminology.
 
-Relevant article: [Automate Your Job Search: Scraping 400+ LinkedIn Jobs with Python](https://www.franciscomoretti.com/blog/automate-your-job-search)
+## What changed from the original
 
-## Installation
+- **Indeed only.** `--site` accepts `indeed` and nothing else. The LinkedIn, Glassdoor,
+  ZipRecruiter and Google adapters are gone.
+- **Scraping comes from [speedyapply/JobSpy](https://github.com/speedyapply/JobSpy)**,
+  which is actively maintained. This repo no longer contains a scraper.
+- The CLI's batching, retry/backoff, threading, CSV output and URL dedup are unchanged.
 
-From PyPI:
+## Install
+
 ```bash
-pip install -U jobsparser
+python3 -m venv .venv
+.venv/bin/pip install -e ./jobsparser
 ```
 
-From source (if you've cloned this monorepo):
+This pulls JobSpy from git — `jobsparser` depends on `python-jobspy @ git+https://github.com/speedyapply/JobSpy.git`.
+
+## Use
+
 ```bash
-cd jobsparser
-pip install .
+.venv/bin/jobsparser \
+  --search-term '("retail" OR "sales associate" OR cashier OR merchandiser)' \
+  --location "Portland, OR" \
+  --distance 10 \
+  --site indeed \
+  --results-wanted 600 \
+  --batch-size 100 \
+  --sleep-time 60 \
+  --hours-old 24 \
+  --indeed-country US \
+  --output-dir data
 ```
 
-## Usage
+Repeat `--search-term` to run several queries. Each run writes `data/jobs_<N>.csv`,
+deduplicated on `job_url`. Columns include `title`, `company`, `location`,
+`date_posted`, `job_url` and `description`.
 
-Basic usage:
-```bash
-jobsparser --search-term "Python Developer" --location "London"
-```
+Useful flags: `-v` for debug logging, `--max-retries` (default 3), `--proxies`,
+`--remote/--no-remote`, `--job-type`.
 
-Use multiple job sites:
-```bash
-jobsparser --search-term "Frontend Engineer" --location "Remote" --site linkedin --site indeed
-```
+## Notes
 
-Advanced usage:
-```bash
-jobsparser \
-     --search-term "junior web developer" \
-     --search-term "junior software engineer" \
-     --search-term "junior frontend engineer" \
-     --location "London" \
-     --site linkedin \
-     --site indeed \
-     --site google \
-     --results-wanted 20 \
-     --job-type fulltime \
-     --output-dir "my_jobs" \
-     --hours-old 168 \
-     --linkedin-experience-level "internship" \
-     --linkedin-experience-level "entry_level" \
-     --indeed-country UK
-```
-
-See all options:
-```bash
-jobsparser --help
-```
-
-## Features
-
-- Scrape jobs from LinkedIn, Indeed, and Glassdoor
-- Customizable search parameters:
-  - Job type (fulltime, parttime, contract, internship)
-  - Search radius (distance)
-  - Number of results
-  - Location and country
-- Automatic retries and rate limiting
-- CSV output with unique filenames
-- Progress tracking and status updates
-
-## Options
-
-- `--search-term`: Job search query (required)
-- `--location`: Job location (required)
-- `--site`: Job sites to search (default: linkedin)
-- `--results-wanted`: Total number of results (default: 15)
-- `--distance`: Search radius in miles/km (default: 50)
-- `--job-type`: Type of job (default: None)
-- `--country`: Country code for Indeed search (default: UK)
-- `--fetch-description`: Fetch full job description (default: false)
-- `--proxies`: Proxy addresses to use (can be specified multiple times)
-- `--batch-size`: Results per batch (default: 30)
-- `--sleep-time`: Base sleep time between batches (default: 100)
-- `--max-retries`: Maximum retry attempts per batch (default: 3)
-- `--output-dir`: Directory for CSV files (default: data)
-- `--hours-old`: Hours old for job search (default: None)
-- `--linkedin-experience-level`: Experience levels for LinkedIn search (internship, entry_level, associate, mid_senior, director, executive)
-
-
-## Monorepo Overview
-
-This repository contains the following packages:
-
-*   **`jobsparser/`**: A CLI tool to scrape jobs from multiple job sites.
-*   **`jobspy2/`**: A Python library that extends the original [JobSpy](https://github.com/Bunsly/JobSpy) library, used by `jobsparser`.
+- Keep `--sleep-time` non-trivial. Bumping it too fast gets you rate-limited.
+- Queries are deliberately broad — recall matters more than precision, since false
+  positives are filtered by hand afterwards and a missed job cannot be recovered.
+- JobSpy is consumed from git, so breaking upstream changes can reach you. Pin if that
+  becomes a problem.
 
 ## License
 
-The `jobsparser` package is licensed under the MIT License. See `jobsparser/LICENSE` for details. 
-
+MIT, inherited from the original.

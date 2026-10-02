@@ -1,5 +1,9 @@
 import click
-from jobspy2 import scrape_jobs, LinkedInExperienceLevel
+from jobspy import scrape_jobs
+
+# This fork scrapes Indeed only. Upstream JobSpy (speedyapply) is the maintained
+# source of the scraping library; see docs/adr/0001-adopt-upstream-jobspy.md.
+SUPPORTED_SITES = ['indeed']
 import pandas as pd
 import os
 import time
@@ -39,13 +43,11 @@ def _scrape_single_site(
     search_term: str,
     location: str,
     distance: int,
-    linkedin_fetch_description: bool,
     job_type: str,
     country_indeed: str,
     results_wanted_for_site: int,
     proxies: list[str] | None,
     hours_old: int | None,
-    linkedin_experience_levels: list | None,
     logger: logging.Logger, # Main logger for this function's operations
     batch_size: int,
     sleep_time: int,
@@ -69,15 +71,12 @@ def _scrape_single_site(
                     location=location,
                     distance=distance,
                     is_remote=remote,
-                    linkedin_fetch_description=linkedin_fetch_description,
                     job_type=job_type,
                     country_indeed=country_indeed,
                     results_wanted=iteration_results_wanted,
                     offset=offset,
                     proxies=proxies,
                     hours_old=hours_old,
-                    linkedin_experience_levels=linkedin_experience_levels,
-                    logger=logger # Pass the parent logger for jobspy to use
                 )
                 if jobs_df_scraped is None or jobs_df_scraped.empty:
                     new_jobs = []
@@ -128,12 +127,11 @@ def _scrape_single_site(
 )
 @click.option('--search-term', required=True, multiple=True, help='Job search query (can be specified multiple times)')
 @click.option('--location', required=True, help='Job location')
-@click.option('--site', multiple=True, type=click.Choice(['linkedin', 'indeed', 'glassdoor', 'zip_recruiter', 'google']), default=['linkedin'], help='Job sites to search')
+@click.option('--site', multiple=True, type=click.Choice(SUPPORTED_SITES), default=SUPPORTED_SITES, help='Job sites to search (this fork supports Indeed only)')
 @click.option('--results-wanted', default=15, help='Total number of results to fetch per site')
 @click.option('--distance', default=50, help='Distance radius for job search')
 @click.option('--job-type', type=click.Choice(['fulltime', 'parttime', 'contract', 'internship']), default=None, help='Type of job')
 @click.option('--indeed-country', default='usa', help='Country code for Indeed search')
-@click.option('--fetch-description/--no-fetch-description', default=False, help='Fetch full job description for LinkedIn')
 @click.option('--proxies', multiple=True, default=None, help="Proxy addresses to use. Can be specified multiple times. E.g. --proxies '208.195.175.46:65095' --proxies '208.195.175.45:65095'")
 @click.option('--batch-size', default=30, help='Number of results to fetch in each batch')
 @click.option('--sleep-time', default=100, help='Base sleep time between batches in seconds')
@@ -141,10 +139,9 @@ def _scrape_single_site(
 @click.option('--hours-old', default=None, type=int, help='Hours old for job search')
 @click.option('--remote/--no-remote', default=False, help='Filter to remote jobs only (uses jobspy is_remote per site)')
 @click.option('--output-dir', default='data', help='Directory to save output CSV')
-@click.option('--linkedin-experience-level', multiple=True, type=click.Choice([level.value for level in LinkedInExperienceLevel]), default=None, help='Experience levels for LinkedIn')
 @click.option('-v', '--verbose', count=True, help="Verbosity: -v for DEBUG, default INFO for this script's logs.", default=0)
 def main(search_term, location, site, results_wanted, distance, job_type, indeed_country,
-         fetch_description, proxies, batch_size, sleep_time, max_retries, hours_old, remote, output_dir, linkedin_experience_level, verbose):
+         proxies, batch_size, sleep_time, max_retries, hours_old, remote, output_dir, verbose):
     """Scrape jobs from various job sites with customizable parameters."""
     
     # Determine overall log level for this script's loggers
@@ -219,13 +216,11 @@ def main(search_term, location, site, results_wanted, distance, job_type, indeed
                     search_term=current_search_term,
                     location=location,
                     distance=distance,
-                    linkedin_fetch_description=fetch_description,
                     job_type=job_type,
                     country_indeed=indeed_country,
                     results_wanted_for_site=results_wanted,
                     proxies=list(proxies) if proxies else None,
                     hours_old=hours_old,
-                    linkedin_experience_levels=list(linkedin_experience_level) if linkedin_experience_level else None,
                     logger=site_logger,
                     batch_size=batch_size,
                     sleep_time=sleep_time,

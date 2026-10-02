@@ -2,7 +2,7 @@
 
 ### Issue tracker
 
-Local markdown under `.scratch/<feature>/` — no git remote yet. See `docs/agents/issue-tracker.md`.
+Local markdown under `.scratch/<feature>/` — no `origin` remote yet. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 

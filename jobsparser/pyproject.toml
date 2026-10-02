@@ -25,11 +25,8 @@ classifiers = [
 dependencies = [
     "click>=8.0.0",
     "pandas>=2.0.0",
-    "jobspy2>=0.0.8"
+    "python-jobspy @ git+https://github.com/speedyapply/JobSpy.git"
 ]
-
-[tool.uv.sources]
-jobspy2 = { path = "../jobspy2", editable = true }
 
 [project.urls]
 Repository = "https://github.com/FranciscoMoretti/jobsparser"
@@ -42,3 +39,6 @@ line-length = 88
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/jobsparser"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
