@@ -54,10 +54,14 @@ def _scrape_single_site(
     max_retries: int,
     remote: bool,
 ):
-    """Scrapes jobs for a single site with retries, batching, and sleep."""
+    """Scrapes jobs for a single site with retries, batching, and sleep.
+
+    Returns (jobs, exhausted). `exhausted` is False when the run stopped early because
+    retries were exhausted, so the caller can distinguish "no more jobs" from "failed"."""
     offset = 0
     site_all_jobs = []
     found_all_available_jobs_for_site = False
+    exhausted = True
 
     while len(site_all_jobs) < results_wanted_for_site and not found_all_available_jobs_for_site:
         retry_count = 0
@@ -109,12 +113,13 @@ def _scrape_single_site(
                 logger.warning(f"Sleeping for {sleep_duration_on_error} seconds before retry (attempt {retry_count}/{max_retries})")
                 time.sleep(sleep_duration_on_error)
                 if retry_count >= max_retries:
-                    logger.error(f"Max retries reached. Moving on.")
-                    found_all_available_jobs_for_site = True 
-                    break 
-    
+                    logger.error(f"Max retries reached. Stopping this search term.")
+                    found_all_available_jobs_for_site = True
+                    exhausted = False
+                    break
+
     logger.info(f"Finished scraping. Total jobs found: {len(site_all_jobs)}")
-    return site_all_jobs
+    return site_all_jobs, exhausted
 
 @click.command()
 @click.option(
@@ -159,7 +164,16 @@ def main(search_term, location, site, results_wanted, distance, job_type, indeed
     csv_filename = f"{output_dir}/jobs_{counter}.csv"
 
     all_jobs_collected = []
-    
+    seen_job_urls = set()
+    failed_terms = 0
+
+    def persist_progress():
+        """Rewrite the CSV with everything collected so far. Called after each search
+        term so a long multi-term run is not lost if a later term fails."""
+        if not all_jobs_collected:
+            return
+        pd.DataFrame(all_jobs_collected).to_csv(csv_filename, index=False)
+
     site_colors = ["cyan", "green", "yellow", "magenta", "blue", "red"]
 
     if not site:
@@ -232,21 +246,44 @@ def main(search_term, location, site, results_wanted, distance, job_type, indeed
             for future in concurrent.futures.as_completed(future_to_site_logger_map):
                 completed_site_logger = future_to_site_logger_map[future]
                 try:
-                    jobs_from_site = future.result()
-                    all_jobs_collected.extend(jobs_from_site)
+                    jobs_from_site, exhausted = future.result()
+                    if not exhausted:
+                        failed_terms += 1
+                    for job in jobs_from_site:
+                        url = job.get("job_url")
+                        if url and url not in seen_job_urls:
+                            seen_job_urls.add(url)
+                            all_jobs_collected.append(job)
+
+                    # Persist after every search term: a 600-result multi-term run takes a
+                    # long time, and losing completed terms to a later failure is worse.
+                    persist_progress()
+                    completed_site_logger.info(
+                        f"Progress saved to {csv_filename} ({len(all_jobs_collected)} jobs so far)."
+                    )
                     completed_site_logger.info(f"Completed. Found {len(jobs_from_site)} jobs.")
                 except Exception as exc:
+                    failed_terms += 1
                     completed_site_logger.error(f"Task generated an exception: {exc}", exc_info=True)
 
     if not all_jobs_collected:
         root_logger.warning("No jobs found after scraping all sites. Check parameters or site availability.")
         return
 
-    # Convert to DataFrame and remove duplicates
-    jobs_df = pd.DataFrame(all_jobs_collected)
-    jobs_df = jobs_df.drop_duplicates(subset=['job_url'], keep='first')
-    jobs_df.to_csv(csv_filename, index=False)
-    root_logger.info(f"Successfully saved {len(jobs_df)} unique jobs from {len(site)} site(s) to {csv_filename}")
+    # Already deduplicated by job_url as each term completed; write the final total.
+    persist_progress()
+    root_logger.info(
+        f"Successfully saved {len(all_jobs_collected)} unique jobs "
+        f"from {len(site)} site(s) to {csv_filename}"
+    )
+
+    if failed_terms:
+        root_logger.error(
+            f"{failed_terms} of {len(search_term)} search term(s) failed. Partial results "
+            f"saved to {csv_filename} ({len(all_jobs_collected)} jobs). "
+            "Re-run to retry the failed terms."
+        )
+        raise SystemExit(1)
 
 if __name__ == '__main__':
     main() 

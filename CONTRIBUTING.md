@@ -1,73 +1,39 @@
-# Contributing to jobsparser
+# Contributing
 
-This guide outlines the development and release process for `jobsparser`. We use `make` for common tasks and `uv` for environment management and publishing.
+This is a personal fork. It runs from source and is **not published to PyPI** — there is
+no build, publish, or release process here.
 
-## Development Setup
-
-To set up your development environment:
-
-1.  Run the setup command:
-    ```bash
-    make setup_jobsparser_env
-    ```
-
-## Building the Package
-
-To build the `jobsparser` package:
+## Setup
 
 ```bash
-make build-jobsparser
+make setup
 ```
 
-## Publishing to PyPI
+That creates `.venv` and installs the CLI in editable mode along with
+[python-jobspy](https://github.com/speedyapply/JobSpy) from git.
 
-Publishing is handled by the `make publish-jobsparser` command, which uses `uv publish`.
-
-### Authentication
-
-`uv publish` requires an API token from PyPI.
-
-1.  Create an API token on PyPI if you don't have one: [https://pypi.org/manage/account/token/](https://pypi.org/manage/account/token/)
-2.  In the **root of the workspace** (where the `Makefile` is located), create a `.env` file. If an `.env.example` file exists, you can copy it:
-    ```bash
-    cp .env.example .env
-    ```
-    Otherwise, create a new `.env` file.
-3.  Add your PyPI token to this `.env` file. `uv` typically uses the `UV_TOKEN` environment variable for PyPI authentication. The `publish-jobsparser` Make target is configured to load this `.env` file.
-    Example content for your `.env` file:
-    ```env
-    # In your .env file (ensure this file is in .gitignore!)
-    UV_TOKEN=pypi-your-api-token-here
-    ```
-    The `Makefile` loads variables from `.env`, making `UV_TOKEN` available to `uv publish`.
-
-### Publishing Steps
-
-1.  **Update Version**: Increment the version number in `jobsparser/pyproject.toml`.
-2.  **Publish to PyPI**:
-    ```bash
-    make publish-jobsparser
-    ```
-
-## Testing Local Installation
-
-After building the package, you can test if it installs and imports correctly using a dedicated make target:
+## Running
 
 ```bash
-make test-install-jobsparser
+.venv/bin/jobsparser --search-term '"data entry"' --location "Portland, OR" \
+  --results-wanted 600 --batch-size 100 --sleep-time 60 --hours-old 24 \
+  --indeed-country US --output-dir data
 ```
-This command first ensures the package is built, then uses `uv run` to execute a simple import test (`import jobsparser`) within the context of the project's virtual environment.
 
-
-## Running jobsparser locally
+Or via make:
 
 ```bash
-./run_local.sh <jobsparser_args>
+make scrape SEARCH_TERM='"data entry"' LOCATION="Portland, OR"
 ```
 
-E.g.
-```bash
-./run_local.sh --search-term "data engineer" --location "London" --site linkedin
-```
+`make scrape` accepts `RESULTS_WANTED`, `BATCH_SIZE`, `SLEEP_TIME`, `HOURS_OLD`,
+`INDEED_COUNTRY`, `DISTANCE` and `OUTPUT_DIR` as make variables, each defaulting to the
+values above.
 
+## Notes
 
+- The CSV is rewritten after every search term, so a long multi-term run keeps completed
+  results if a later term fails.
+- JobSpy is installed from git. Pin it in `jobsparser/pyproject.toml` if upstream
+  breaking changes become a problem.
+- Keep `--sleep-time` non-trivial; going too fast gets you rate-limited.
