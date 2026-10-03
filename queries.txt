@@ -1,0 +1,22 @@
+# Search terms, one per line. Blank lines and # comments ignored.
+# Each line is one Job Family (see CONTEXT.md). Toggle with # at line start.
+# Runtime ~ (results-wanted / batch-size) x sleep-time seconds PER family.
+
+# --- Retail, Logistics & Specialized Trades ---
+# Note: this query was truncated in your notes ("tool …"); the machine-operator
+# removal you were considering was never applied. Re-check before using.
+("retail" OR "retail sales" OR "sales associate" OR cashier OR "store associate" OR "sales clerk" OR merchandiser OR "visual merchandiser" OR "stock clerk" OR "stock associate" OR "inventory associate" OR "grocery clerk" OR "customer service representative" OR "front end associate" OR "sales floor associate" OR "seasonal associate" OR "supervisor" OR "team lead" OR "shift lead" OR "shift supervisor" OR "team supervisor" OR "retail specialist" OR keyholder OR "brand ambassador" OR "personal shopper" OR "concierge" OR "greeter" OR "guest advisor" OR "fulfillment associate" OR "order picker" OR "package handler" OR "receiving clerk" OR "backroom associate" OR "budtender" OR "pro desk" OR "paint specialist" OR "paint associate")
+
+# --- IT, Office & Documentation ---
+("help desk" OR "help desk technician" OR "service desk" OR "desktop support" OR "IT support" OR "technical support" OR "support technician" OR "junior IT" OR "IT technician" OR "deployment technician" OR "NOC technician" OR "repair technician" OR "computer repair" OR "technical customer service" OR "chat support" OR "data entry" OR "office assistant" OR "administrative assistant" OR "receptionist" OR "file clerk" OR "mailroom clerk" OR "technical writer" OR "documentation specialist" OR "knowledge base" OR "data integrity")
+
+# --- Social Services, Shelter & Housing Support ---
+("residential advocate" OR "shelter associate" OR "shelter attendant" OR "shelter worker" OR "program associate" OR "housing specialist" OR "housing advocate" OR "peer support" OR "peer specialist" OR "crisis intervention" OR "intake specialist" OR "social services assistant" OR "community health worker" OR "outreach worker" OR "resource specialist" OR "case aide" OR "residential counselor" OR "case manager" OR "housing caseworker" OR "program manager" OR "program coordinator" OR "mental health counselor" OR "substance use counselor" OR "recovery support specialist" OR "benefits specialist" OR "enrollment specialist" OR "outreach coordinator" OR "community navigator")
+
+# --- Overnight Monitoring & Front Desk (Non-Security) ---
+("night manager" OR "night shift supervisor" OR "overnight supervisor" OR "night supervisor" OR "night auditor" OR "night monitor" OR "overnight associate" OR "front desk agent" OR "front desk clerk" OR "guest services" OR "residential concierge" OR "dormitory attendant" OR "housing monitor" OR "safety attendant" OR "lobby attendant" OR "night receptionist" OR "front desk supervisor" OR "resident assistant" OR "dorm supervisor" OR "call center agent" OR "building concierge" OR "property attendant")
+
+# --- Entry-level catch-all ---
+# NOTE: without a location keyword this matches nationally, not Portland. It is
+# only useful with --distance 10 held, and expect heavy false positives.
+("entry-level" OR "entry level" OR "no experience")
