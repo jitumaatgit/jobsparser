@@ -1,5 +1,7 @@
 # Search terms, one per line. Blank lines and # comments ignored.
 # Each line is one Job Family (see CONTEXT.md). Toggle with # at line start.
+# A "# --- <Family> ---" header is the --term-label for every term below it, so
+# a term before any header gets '' and one added under a family inherits it.
 # Runtime ~ (results-wanted / batch-size) x sleep-time seconds PER family.
 
 # --- Retail, Logistics & Specialized Trades ---
