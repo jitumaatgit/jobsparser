@@ -1,7 +1,9 @@
 # jobsparser (personal fork)
 
 A personal job-search CLI: scrapes **Indeed** for hand-written boolean search queries
-and writes CSV for a Google Sheets review pipeline.
+and writes CSV that the review bench triages into applications. The Google Sheets
+review pipeline this fork once fed is gone — see
+[ADR-0002](docs/adr/0002-replace-sheets-review-pipeline.md).
 
 This is a fork of [FranciscoMoretti/jobsparser](https://github.com/FranciscoMoretti/jobsparser),
 narrowed to one site and pointed at a maintained scraping library. See
@@ -43,7 +45,22 @@ This pulls JobSpy from git — `jobsparser` depends on `python-jobspy @ git+http
 
 Repeat `--search-term` to run several queries. Each run writes `data/jobs_<N>.csv`,
 deduplicated on `job_url`. Columns include `title`, `company`, `location`,
-`date_posted`, `job_url` and `description`.
+`date_posted`, `job_url`, `description`, `search_term` and `term_label`.
+
+`--term-label` records which job family each row came from. It takes one label per
+search term, paired by position, so the terms stay self-describing in the CSV instead of
+having to be reconstructed later:
+
+```bash
+.venv/bin/jobsparser \
+  --search-term '("retail" OR cashier)' --term-label 'Retail, Logistics & Specialized Trades' \
+  --search-term '("help desk" OR "data entry")' --term-label 'IT, Office & Documentation' \
+  --location "Portland, OR" \
+  --results-wanted 600 --output-dir data
+```
+
+Omitting it is fine: every row gets `term_label` of `''`. Giving a different number of
+labels than search terms is a usage error, so a mis-paired run cannot half-complete.
 
 Useful flags: `-v` for debug logging, `--max-retries` (default 3), `--proxies`,
 `--remote/--no-remote`, `--job-type`.

@@ -41,6 +41,7 @@ def get_version(ctx, param, value):
 def _scrape_single_site(
     site_name: str,
     search_term: str,
+    term_label: str,
     location: str,
     distance: int,
     job_type: str,
@@ -57,7 +58,8 @@ def _scrape_single_site(
     """Scrapes jobs for a single site with retries, batching, and sleep.
 
     Returns (jobs, exhausted). `exhausted` is False when the run stopped early because
-    retries were exhausted, so the caller can distinguish "no more jobs" from "failed"."""
+    retries were exhausted, so the caller can distinguish "no more jobs" from "failed".
+    Every returned record carries `search_term` and `term_label` provenance."""
     offset = 0
     site_all_jobs = []
     found_all_available_jobs_for_site = False
@@ -86,6 +88,13 @@ def _scrape_single_site(
                     new_jobs = []
                 else:
                     new_jobs = jobs_df_scraped.to_dict("records")
+                    # Provenance is stamped where the record is produced so every row in
+                    # the CSV says which search term and job family it came from. An
+                    # absent label stays "" (not None) because the CSV is read by column
+                    # name, and "None" would read as a family.
+                    for job in new_jobs:
+                        job["search_term"] = search_term
+                        job["term_label"] = term_label
                 
                 site_all_jobs.extend(new_jobs)
                 offset += iteration_results_wanted
@@ -131,6 +140,7 @@ def _scrape_single_site(
     help="Show the version and exit.",
 )
 @click.option('--search-term', required=True, multiple=True, help='Job search query (can be specified multiple times)')
+@click.option('--term-label', multiple=True, help='Job family label for the matching --search-term. One label per search term, paired by position; can be specified multiple times')
 @click.option('--location', required=True, help='Job location')
 @click.option('--site', multiple=True, type=click.Choice(SUPPORTED_SITES), default=SUPPORTED_SITES, help='Job sites to search (this fork supports Indeed only)')
 @click.option('--results-wanted', default=15, help='Total number of results to fetch per site')
@@ -145,9 +155,14 @@ def _scrape_single_site(
 @click.option('--remote/--no-remote', default=False, help='Filter to remote jobs only (uses jobspy is_remote per site)')
 @click.option('--output-dir', default='data', help='Directory to save output CSV')
 @click.option('-v', '--verbose', count=True, help="Verbosity: -v for DEBUG, default INFO for this script's logs.", default=0)
-def main(search_term, location, site, results_wanted, distance, job_type, indeed_country,
+def main(search_term, term_label, location, site, results_wanted, distance, job_type, indeed_country,
          proxies, batch_size, sleep_time, max_retries, hours_old, remote, output_dir, verbose):
     """Scrape jobs from various job sites with customizable parameters."""
+    if term_label and len(term_label) != len(search_term):
+        raise click.UsageError(
+            f"--term-label takes one label per --search-term, paired by position; got "
+            f"{len(term_label)} label(s) for {len(search_term)} search term(s)."
+        )
     
     # Determine overall log level for this script's loggers
     if verbose == 0: # No -v flags
@@ -200,6 +215,7 @@ def main(search_term, location, site, results_wanted, distance, job_type, indeed
             time.sleep(sleep_time)
             
         root_logger.info(f"Processing search term: {current_search_term}")
+        current_term_label = term_label[idx] if term_label else ""
         
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(site)) as executor:
             future_to_site_logger_map = {}
@@ -240,6 +256,7 @@ def main(search_term, location, site, results_wanted, distance, job_type, indeed
                     sleep_time=sleep_time,
                     max_retries=max_retries,
                     remote=remote,
+                    term_label=current_term_label,
                 )
                 future_to_site_logger_map[future] = site_logger
 

@@ -30,6 +30,38 @@ make scrape SEARCH_TERM='"data entry"' LOCATION="Portland, OR"
 `INDEED_COUNTRY`, `DISTANCE` and `OUTPUT_DIR` as make variables, each defaulting to the
 values above.
 
+`--term-label` records the job family each row came from — one label per search term,
+paired by position, so the CSV stays self-describing:
+
+```bash
+.venv/bin/jobsparser \
+  --search-term '("retail" OR cashier)' --term-label 'Retail, Logistics & Specialized Trades' \
+  --search-term '("help desk" OR "data entry")' --term-label 'IT, Office & Documentation' \
+  --location "Portland, OR" --results-wanted 600 --output-dir data
+```
+
+Omit it and every row gets an empty `term_label`; give a different number of labels than
+search terms and the run fails with a usage error before anything is scraped.
+
+## Tests
+
+Plain `unittest` — no pytest, no extra install:
+
+```bash
+.venv/bin/python -m unittest discover -s jobsparser/tests
+```
+
+Use the venv interpreter: the system `python3` has no `jobsparser` installed. Each test
+stubs `scrape_jobs` at the network boundary and asserts on the CSV that gets written, so
+the suite is offline and deterministic. New test modules need the `sys.path` shim at the
+top of `test_cli_provenance.py` — the stub `jobsparser/__init__.py` at the
+project-directory root shadows the real package whenever the repo root is the working
+directory.
+
+The files under `.scratch/fork-assessment/` are **not** a test suite. They are live
+probes against Indeed that print findings and assert nothing; each one costs real
+requests, so run them by hand.
+
 ## Notes
 
 - The CSV is rewritten after every search term, so a long multi-term run keeps completed
