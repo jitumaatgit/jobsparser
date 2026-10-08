@@ -7,6 +7,7 @@ schema, survives a separate process, never lets an ingest destroy a decision,
 and refuses values from the other axis.
 """
 import argparse
+import csv
 import sqlite3
 import subprocess
 import sys
@@ -34,6 +35,16 @@ COLUMNS = (
     ("updated_at", "TEXT"),
 )
 
+CSV_COLUMNS = ["job_url", "title", "company", "location", "date_posted", "description"]
+
+def _row(job_url, title, **over):
+    row = {
+        "job_url": job_url, "title": title, "company": "Employer",
+        "location": "Portland, OR", "date_posted": "2026-10-07",
+        "description": "",
+    }
+    row.update(over)
+    return row
 
 class ReviewStoreTest(unittest.TestCase):
     def setUp(self):
@@ -51,13 +62,27 @@ class ReviewStoreTest(unittest.TestCase):
         ).fetchone()
 
     def run_cli(self, *argv, data_dir=None):
+        # --db is explicit because the default resolves against the child's
+        # cwd (/tmp), which would share one index across every run.
         self.assertTrue(JOBSVIEW.is_file(), f"{JOBSVIEW} is missing")
+        target = data_dir or self.data_dir
         return subprocess.run(
-            [sys.executable, str(JOBSVIEW), "--data-dir", str(data_dir or self.data_dir), *argv],
+            [sys.executable, str(JOBSVIEW), "--data-dir", str(target),
+             "--db", str(target / "jobs.db"), *argv],
             cwd=str(tempfile.gettempdir()),
             capture_output=True,
             text=True,
         )
+
+    def write_csv(self, *rows, data_dir=None):
+        """One run file of scraped jobs, so the listing has something to join."""
+        self.write_csv_to(data_dir or self.data_dir, *rows)
+
+    def write_csv_to(self, data_dir, *rows):
+        with (data_dir / "jobs_0.csv").open("w", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(fh, fieldnames=CSV_COLUMNS)
+            writer.writeheader()
+            writer.writerows(rows)
 
     # -- schema and lifecycle ----------------------------------------------
 
@@ -72,6 +97,9 @@ class ReviewStoreTest(unittest.TestCase):
         self.assertEqual(0, self.con.execute("SELECT COUNT(*) FROM jobs_review").fetchone()[0])
 
     def test_a_read_leaves_the_stored_state_alone(self):
+        # `review --list` joins the store into the job listing, so a read must
+        # still leave every stored row exactly as it was.
+        self.write_csv(_row("https://indeed.com/job/one", "Cashier - Grocery"))
         jobsview.set_decision(self.con, "https://indeed.com/job/one", "keep")
         before = dict(self.read_row(self.con, "https://indeed.com/job/one"))
 
@@ -82,13 +110,22 @@ class ReviewStoreTest(unittest.TestCase):
         after = dict(self.read_row(self.con, "https://indeed.com/job/one"))
         self.assertEqual(before, after)
 
-    def test_a_decision_survives_reopening_across_processes(self):
+    def test_a_decision_survives_reopening_in_another_process(self):
+        # The store is the only source of truth, so durability is asserted by
+        # reading it back from a second interpreter rather than through the
+        # job listing (which ticket 04's tests own).
         jobsview.set_decision(self.con, "https://indeed.com/job/keep-me", "keep")
-
-        proc = self.run_cli("review", "--list")
+        code = (
+            "import sqlite3,sys;c=sqlite3.connect(sys.argv[1]);"
+            "print(c.execute('SELECT decision,application_status FROM jobs_review "
+            "WHERE job_url=?',(sys.argv[2],)).fetchone())"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", code, str(self.db_path), "https://indeed.com/job/keep-me"],
+            capture_output=True, text=True,
+        )
         self.assertEqual(0, proc.returncode, proc.stderr)
-        self.assertIn("keep", proc.stdout)
-        self.assertIn("https://indeed.com/job/keep-me", proc.stdout)
+        self.assertEqual("('keep', 'none')", proc.stdout.strip())
 
     # -- the two axes ------------------------------------------------------
 
@@ -184,31 +221,43 @@ class ReviewStoreTest(unittest.TestCase):
 
     # -- CLI ---------------------------------------------------------------
 
-    def test_review_list_prints_each_row_on_one_line(self):
+    def test_review_list_prints_one_line_per_job_with_both_axes(self):
+        # The listing joins jobs to the store, so what the store contributes is
+        # the two axes, one per line, in each job's own row.
+        self.write_csv(
+            _row("https://indeed.com/job/one", "Cashier - Grocery"),
+            _row("https://indeed.com/job/two", "Help Desk Technician"),
+        )
         jobsview.set_decision(self.con, "https://indeed.com/job/one", "keep")
         jobsview.set_application_status(self.con, "https://indeed.com/job/two", "applied")
 
         proc = self.run_cli("review", "--list")
         self.assertEqual(0, proc.returncode, proc.stderr)
-        lines = [ln for ln in proc.stdout.splitlines() if ln.strip()]
+        lines = [ln for ln in proc.stdout.splitlines() if "indeed.com/job/" in ln]
         self.assertEqual(2, len(lines))
         self.assertIn("https://indeed.com/job/one", lines[0])
         self.assertIn("keep", lines[0])
         self.assertIn("https://indeed.com/job/two", lines[1])
         self.assertIn("applied", lines[1])
+        self.assertIn("unreviewed", lines[1])  # that job has no store row yet
 
     def test_review_list_reports_one_line_when_the_store_cannot_be_opened(self):
-        blocked = self.data_dir / "blocked"
-        blocked.mkdir()
-        blocked.chmod(0o000)
-        self.addCleanup(blocked.chmod, 0o755)
+        with tempfile.TemporaryDirectory() as tmp:
+            data = Path(tmp) / "data"
+            data.mkdir()
+            self.write_csv_to(data, _row("https://indeed.com/job/one", "Cashier - Grocery"))
+            first = self.run_cli("review", "--list", data_dir=data)
+            self.assertEqual(0, first.returncode, first.stderr)
 
-        proc = self.run_cli("review", "--list", data_dir=blocked)
-        self.assertEqual(1, proc.returncode)
-        self.assertIn("cannot open", proc.stderr)
-        self.assertNotIn("Traceback", proc.stderr)
+            (data / "review.db").unlink()
+            (data / "review.db").mkdir()  # sqlite cannot open a directory
+            second = self.run_cli("review", "--list", data_dir=data)
+            self.assertEqual(1, second.returncode)
+            self.assertIn("cannot open", second.stderr)
+            self.assertNotIn("Traceback", second.stderr)
 
     def test_review_without_list_does_nothing(self):
+        self.write_csv(_row("https://indeed.com/job/one", "Cashier - Grocery"))
         proc = self.run_cli("review")
         self.assertEqual(2, proc.returncode)
         self.assertIn("review --list", proc.stderr)

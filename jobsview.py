@@ -48,6 +48,8 @@ DERIVED = [
     ("hourly_max", "REAL"),
     ("annual_min", "REAL"),
     ("annual_max", "REAL"),
+    ("job_family", "TEXT"),
+    ("job_family_source", "TEXT"),
 ]
 
 
@@ -110,12 +112,135 @@ def _run_files(data_dir: Path):
     )
 
 
+# -- family map (queries.txt) -----------------------------------------------
+#
+# queries.txt is the single file a human edits: a "# --- <Family> ---" header
+# names the job family of every search term under it (CONTEXT.md), and
+# run_queries.sh walks the same rule to stamp --term-label. Parsing the map
+# here from the same file keeps that one source of truth. Two projections of
+# the file are needed: the whole term, which is what lands in a CSV's
+# search_term column, and the phrases inside it, which is the only thing a
+# legacy row can be matched against.
+_OR_SPLIT = re.compile(r"\s+OR\s+", re.I)
+_TRIM = " \t\"'()"
+_HEADER_PREFIX = "# --- "
+_HEADER_SUFFIX = " ---"
+
+
+def _norm(text: str) -> str:
+    """Collapse a term's whitespace so a CSV value and a queries.txt line
+    compare equal even when one of them carries extra spaces."""
+    return " ".join((text or "").split())
+
+
+def _query_pairs(path: Path) -> list[tuple[str, str]]:
+    """[(search term, job family)] straight from queries.txt's headers."""
+    pairs: list[tuple[str, str]] = []
+    family = ""
+    for line in Path(path).read_text(encoding="utf-8-sig").splitlines():
+        trimmed = line.strip()
+        if trimmed.startswith(_HEADER_PREFIX) and trimmed.endswith(_HEADER_SUFFIX):
+            family = trimmed[len(_HEADER_PREFIX):-len(_HEADER_SUFFIX)].strip()
+        elif trimmed and not trimmed.startswith("#") and family:
+            pairs.append((_norm(trimmed), family))
+    return pairs
+
+
+def parse_family_map(path) -> dict[str, str]:
+    """Each search term in queries.txt mapped to the family header above it.
+
+    A term above every header is absent from the map rather than mapped to
+    nothing, so such a row falls back to the title guess and is only (unknown)
+    when that misses too.
+    """
+    return {term: family for term, family in _query_pairs(path)}
+
+
+def _search_phrases(term: str) -> list[str]:
+    """The individual phrases inside one OR-group search term."""
+    phrases = [a.strip(_TRIM).strip() for a in _OR_SPLIT.split(term.strip())]
+    return [p for p in phrases if p]
+
+
+def family_terms(path) -> dict[str, list[str]]:
+    """Each family's search phrases, in queries.txt order.
+
+    That order is what breaks ties in guess_family, so it is insertion order
+    rather than sorted -- a guess has to stay reproducible.
+    """
+    out: dict[str, list[str]] = {}
+    for term, family in _query_pairs(path):
+        out.setdefault(family, []).extend(_search_phrases(term))
+    return out
+
+
+def guess_family(title: str, terms_by_family: dict[str, list[str]]) -> str | None:
+    """Guess one row's job family from its title. Display-only by definition.
+
+    Case-insensitive substring match, and the longest matching phrase wins so
+    the specific family claims the row -- "sales associate" outranks "sales".
+    This heuristic is the whole reason it is one small function: the legacy
+    backfill is a guess that will need re-tuning.
+    """
+    hay = _norm(title).lower()
+    if not hay:
+        return None
+    best: tuple[int, str] | None = None
+    for family, phrases in terms_by_family.items():
+        for phrase in phrases:
+            needle = _norm(phrase).lower()
+            if needle in hay and (best is None or len(needle) > best[0]):
+                best = (len(needle), family)
+    return best[1] if best else None
+
+
+def resolve_family(row: dict, family_map: dict[str, str],
+                   terms_by_family: dict[str, list[str]]) -> tuple[str, str]:
+    """(job family, job_family_source) for one scraped row.
+
+    The source is what the bench's flag keys on:
+      stamped  -- the CSV carried term_label, so the family is recorded fact
+      inferred -- the CSV did not, so the family was recovered from
+                  queries.txt, by exact term or guessed from the title.
+                  Display-only: never the basis of an exclusion rule.
+      unknown  -- neither, shown as (unknown) and never filtered out
+    """
+    label = (row.get("term_label") or "").strip()
+    if label:
+        return label, "stamped"
+    family = family_map.get(_norm(row.get("search_term")))
+    if family:
+        return family, "inferred"
+    guessed = guess_family(row.get("title") or "", terms_by_family)
+    if guessed:
+        return guessed, "inferred"
+    return "(unknown)", "unknown"
+
+
 def cmd_ingest(args) -> int:
     data_dir = Path(args.data_dir)
     files = _run_files(data_dir)
     if not files:
         print(f"no jobs_*.csv under {data_dir}", file=sys.stderr)
         return 1
+
+    # The job family is derived here, in the derived index: every reader
+    # (review --list, the bench, the exports) then gets it from one place, and
+    # a re-tuned queries.txt is picked up by the next ingest.
+    queries = Path(getattr(args, "queries", None) or "queries.txt")
+    try:
+        if queries.exists():
+            family_map = parse_family_map(queries)
+            terms_by_family = family_terms(queries)
+        else:
+            family_map, terms_by_family = {}, {}
+            print(f"no family map at {queries} -- job families will be "
+                  f"guessed from titles or (unknown)", file=sys.stderr)
+    except (OSError, UnicodeDecodeError) as err:
+        # The one file a human edits, so a half-saved or unreadable one
+        # degrades the families instead of failing the whole ingest.
+        family_map, terms_by_family = {}, {}
+        print(f"cannot read the family map at {queries}: {err}", file=sys.stderr)
 
     rows: list[dict] = []
     seen: dict[str, int] = {}
@@ -124,20 +249,35 @@ def cmd_ingest(args) -> int:
         run_no = int(run_no)
         with path.open(newline="", encoding="utf-8-sig") as fh:
             reader = csv.DictReader(fh)
-            if not header:
-                header = list(reader.fieldnames or [])
+            # Every run file's columns, first-seen order: a newer CSV adds
+            # search_term/term_label that a legacy first CSV lacks, and a
+            # first-header-only table would silently drop them.
+            for col in reader.fieldnames or []:
+                if col not in header:
+                    header.append(col)
             for row in reader:
                 url = (row.get("job_url") or "").strip()
                 if not url:
                     continue
                 if url in seen:
-                    rows[seen[url]]["last_run"] = run_no
+                    prior = rows[seen[url]]
+                    prior["last_run"] = run_no
+                    # First writer keeps the row, but a later run that carries
+                    # the family label beats the guess backfilled for it:
+                    # recorded fact over inference. A stamp already on the row
+                    # stays put, so the first term to name a family keeps it.
+                    family, source = resolve_family(row, family_map, terms_by_family)
+                    if source == "stamped" and prior["job_family_source"] != "stamped":
+                        prior["job_family"], prior["job_family_source"] = family, source
                     continue
                 hmin, hmax, amin, amax = derive_pay(row)
                 row["first_run"] = run_no
                 row["last_run"] = run_no
                 row["hourly_min"], row["hourly_max"] = hmin, hmax
                 row["annual_min"], row["annual_max"] = amin, amax
+                row["job_family"], row["job_family_source"] = resolve_family(
+                    row, family_map, terms_by_family
+                )
                 seen[url] = len(rows)
                 rows.append(row)
 
@@ -168,7 +308,8 @@ def cmd_ingest(args) -> int:
     n = len(rows)
     with_salary = sum(1 for r in rows if r["hourly_min"] is not None or r["annual_min"] is not None)
     print(f"ingested {n} unique jobs from {len(files)} run file(s) -> {db_path}")
-    print(f"salary known for {with_salary}/{n} ({with_salary / n:.0%})")
+    share = f" ({with_salary / n:.0%})" if n else ""  # a run file can hold no rows
+    print(f"salary known for {with_salary}/{n}{share}")
     con.close()
     return 0
 
@@ -290,42 +431,138 @@ def set_application_status(con, job_url: str, application_status: str) -> None:
         )
 
 
+def _missing_index(db: Path) -> str:
+    """The one message for a missing derived index, so it cannot drift."""
+    return f"{db} missing -- run: python3 jobsview.py ingest"
+
+
+def _index_is_stale(args) -> bool:
+    """True when the derived jobs index is behind the CSVs or the family map.
+
+    A newer run file is the obvious trigger; so is a newer queries.txt, because
+    the job families are derived from it and that guess is meant to be re-tuned
+    without a second command.
+    """
+    db = Path(args.db)
+    if not db.exists():
+        return True
+    built = db.stat().st_mtime
+    for newer in (p.stat().st_mtime for p in _run_files(Path(args.data_dir))):
+        if newer > built:
+            return True
+    queries = Path(getattr(args, "queries", None) or "queries.txt")
+    return queries.exists() and queries.stat().st_mtime > built
+
+
+def _index_has_every_column(args) -> bool:
+    """False when the derived index predates a column jobs.db is expected to
+    carry, whatever its mtime says.
+
+    An index built before the family map landed has no job_family column, and it
+    would otherwise stay current forever: no CSV ever moves again, so an mtime
+    check alone would keep serving a table the join cannot read.
+    """
+    db = Path(args.db)
+    if not db.exists():
+        return False
+    try:
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        try:
+            have = {r[1] for r in con.execute("PRAGMA table_info(jobs)")}
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return False
+    return all(c in have for c, _ in DERIVED)
+
+
 def cmd_review(args) -> int:
+    csvs = _run_files(Path(args.data_dir))
+    if not csvs and not Path(args.db).exists():
+        print(_missing_index(Path(args.db)), file=sys.stderr)
+        return 1
+    if csvs and (_index_is_stale(args) or not _index_has_every_column(args)):
+        # Ingesting here is safe precisely because the decisions live in the
+        # sidecar: rebuilding the derived index cannot destroy them. An index
+        # with no CSVs beside it is left alone rather than rebuilt empty.
+        rc = cmd_ingest(args)
+        if rc != 0:
+            return rc
     if getattr(args, "list", False):
         return cmd_review_list(args)
     print("nothing to do -- try: python3 jobsview.py review --list", file=sys.stderr)
     return 2
 
 
+def _family_label(r) -> str:
+    """The family as the bench shows it, with a guess flagged as one."""
+    if r["job_family_source"] == "inferred":
+        return f"{r['job_family'] or '(unknown)'} (inferred)"
+    return r["job_family"] or "(unknown)"
+
+
 def cmd_review_list(args) -> int:
-    """Print the store one row per line, so state can be seen without the TUI."""
+    """One line per job, joined with the store, so the queue is readable
+    without the TUI: title, company, location, date, pay, family, decision,
+    application status, then the run the row was last seen in.
+
+    jobs.db drives the listing, so a row that stops appearing in newer CSVs
+    drops off the list while keeping its state in the sidecar; a job with no
+    store row is unreviewed/none by default rather than written there by a read.
+    The store is the connection's main schema so the review store's DDL lands
+    in it, and the derived index is attached just for the join.
+    """
     try:
         con = _review_db(args)
     except (OSError, sqlite3.Error) as err:
         db = Path(args.data_dir) / "review.db"
         print(f"cannot open {db}: {err}", file=sys.stderr)
         return 1
-    con.row_factory = sqlite3.Row
-    rows = con.execute(
-        "SELECT job_url, decision, application_status, first_run, last_run, "
-        "decided_at, updated_at FROM jobs_review ORDER BY job_url"
-    ).fetchall()
-    con.close()
+    try:
+        con.execute("ATTACH DATABASE ? AS jobs", (str(Path(args.db)),))
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            "SELECT j.job_url, j.title, j.company, j.location, j.date_posted, "
+            "j.job_family, j.job_family_source, j.last_run, "
+            "j.hourly_min, j.hourly_max, j.annual_min, j.annual_max, "
+            "r.decision, r.application_status "
+            "FROM jobs.jobs j LEFT JOIN jobs_review r ON r.job_url = j.job_url "
+            "ORDER BY j.rowid"
+        ).fetchall()
+    except sqlite3.Error as err:
+        # Two different failures land here. The index cannot be opened at all,
+        # or it was built from a CSV header that lacks a column the queue
+        # shows -- which is what sqlite's own message reports, so claim
+        # neither, and let it through instead of burying it.
+        print(f"cannot list the queue from {Path(args.db)}: {err}", file=sys.stderr)
+        return 1
+    finally:
+        con.close()
+
     if not rows:
-        print("(review store is empty)")
+        print("(no jobs in the index)")
         return 0
     for r in rows:
-        cells = [r["job_url"], r["decision"], r["application_status"]]
-        cells += ["-" if r[c] is None else str(r[c])
-                  for c in ("first_run", "last_run", "decided_at", "updated_at")]
-        print("  ".join(cells))
+        cells = [
+            (r["title"] or "")[:46].ljust(46),
+            (r["company"] or "")[:26].ljust(26),
+            (r["location"] or "")[:20].ljust(20),
+            (r["date_posted"] or "")[:10],
+            f"{_pay_label(r):<18}",
+            _family_label(r).ljust(46),
+            (r["decision"] or "unreviewed").ljust(14),
+            (r["application_status"] or "none").ljust(10),
+            f"run {r['last_run']}",
+            r["job_url"],
+        ]
+        print(" ".join(cells))
     return 0
 
 
 def _open(args):
     db = Path(args.db)
     if not db.exists():
-        print(f"{db} missing -- run: python3 jobsview.py ingest", file=sys.stderr)
+        print(_missing_index(db), file=sys.stderr)
         sys.exit(1)
     return sqlite3.connect(db)
 
@@ -480,6 +717,10 @@ def main(argv=None) -> int:
     ap.add_argument("--data-dir", default="data")
     ap.add_argument("--db", default="data/jobs.db")
     sub = ap.add_subparsers(dest="cmd", required=True)
+    ap.add_argument(
+        "--queries", default="queries.txt",
+        help="family map: queries.txt whose '# --- Family ---' headers name each family",
+    )
 
     p_ingest = sub.add_parser("ingest", help="load data/jobs_*.csv into SQLite")
     p_ingest.set_defaults(func=cmd_ingest)
@@ -494,8 +735,11 @@ def main(argv=None) -> int:
 
     p_stats = sub.add_parser("stats", help="coverage + employer concentration")
     p_stats.set_defaults(func=cmd_stats)
-    p_review = sub.add_parser("review", help="inspect the review store (data/review.db)")
-    p_review.add_argument("--list", action="store_true", help="print every row, one per line")
+    p_review = sub.add_parser("review", help="the review queue: jobs.db joined with the store")
+    p_review.add_argument(
+        "--list", action="store_true",
+        help="print one line per job, joined with the review store",
+    )
     p_review.set_defaults(func=cmd_review)
 
     args = ap.parse_args(argv)
