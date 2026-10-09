@@ -191,6 +191,100 @@ class ReviewBenchTest(unittest.IsolatedAsyncioTestCase):
         self.build_index([_row(str(n), f"Cashier {n:04}") for n in range(2000)])
         return ReviewBenchApp(self.args)
 
+    def column_widths(self, app):
+        table = app.query_one("#queue", DataTable)
+        return {key: table.columns[key].get_render_width(table)
+                for key in table.columns.keys()}
+
+    async def test_the_queue_draws_every_column_at_an_ordinary_terminal_width(self):
+        # The widths this shipped with summed to more cells than an ordinary
+        # terminal hands the queue, so Textual drew only four of the eight --
+        # Pay, Job family, Decision and Status were absent from the screen, the
+        # two axes that are the whole point, with no key that reached them.
+        # Widths must therefore be derived from the space actually there.
+        self.build_index([_row("one", "Cashier One"), _row("two", "Cashier Two")])
+        app = ReviewBenchApp(self.args)
+
+        async with app.run_test(size=(140, 40)) as pilot:
+            await pilot.pause()
+            table = app.query_one("#queue", DataTable)
+            widths = self.column_widths(app)
+
+            self.assertEqual(
+                ["title", "company", "location", "date", "pay", "family", "decision", "status"],
+                list(table.columns.keys()),
+            )
+            self.assertLessEqual(
+                sum(widths.values()), table.size.width,
+                "a column past the queue's width is not drawn, it is simply lost",
+            )
+            # The axes must never be the columns that absorb the squeeze.
+            for axis in ("decision", "status"):
+                self.assertGreaterEqual(widths[axis], len("unreviewed"), axis)
+
+    async def test_the_columns_reflow_when_the_terminal_is_resized(self):
+        self.build_index([_row("one", "Cashier One"), _row("two", "Cashier Two")])
+        app = ReviewBenchApp(self.args)
+
+        async with app.run_test(size=(140, 40)) as pilot:
+            await pilot.pause()
+            table = app.query_one("#queue", DataTable)
+            narrow = self.column_widths(app)
+
+            await pilot.resize_terminal(62, 28)
+            await pilot.pause()
+            small = self.column_widths(app)
+            self.assertGreater(sum(small.values()), table.size.width)
+
+            await pilot.resize_terminal(140, 40)
+            await pilot.pause()
+            restored = self.column_widths(app)
+            self.assertEqual(table.size.width, sum(restored.values()))
+
+            await pilot.resize_terminal(240, 40)
+            await pilot.pause()
+            wide = self.column_widths(app)
+
+            self.assertEqual(table.size.width, sum(wide.values()))
+            self.assertGreater(wide["title"], narrow["title"])
+            # Extra room must never cost a column.
+            self.assertEqual(len(narrow), len(wide))
+
+    async def test_a_narrow_terminal_keeps_columns_reachable_by_arrow_keys(self):
+        self.build_index([_row("one", "Cashier One"), _row("two", "Cashier Two")])
+        app = ReviewBenchApp(self.args)
+
+        async with app.run_test(size=(62, 28)) as pilot:
+            await pilot.pause()
+            table = app.query_one("#queue", DataTable)
+            self.assertGreater(
+                sum(self.column_widths(app).values()), table.size.width,
+                "narrow view keeps legible column widths and scrolls instead of crushing them",
+            )
+            self.assertEqual(0, table.scroll_x)
+
+            await pilot.press("right")
+            await pilot.pause()
+            self.assertGreater(table.scroll_x, 0)
+
+            await pilot.press("left")
+            await pilot.pause()
+            self.assertEqual(0, table.scroll_x)
+
+    async def test_the_footer_keeps_the_safety_net_on_an_ordinary_terminal(self):
+        # The original sixteen shown bindings ran past a 140-column footer,
+        # hiding Undo and Quit even though undo is the safety net for a mis-keyed
+        # `f`.
+        self.build_index([_row("one", "Cashier One"), _row("two", "Cashier Two")])
+        app = ReviewBenchApp(self.args)
+
+        async with app.run_test(size=(140, 40)) as pilot:
+            await pilot.pause()
+            screen = app.export_screenshot()
+
+        self.assertIn("Undo", screen)
+        self.assertIn("Quit", screen)
+
     async def test_two_thousand_rows_navigate_the_virtual_table(self):
         app = self._two_thousand()
 

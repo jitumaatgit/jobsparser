@@ -8,6 +8,7 @@ import webbrowser
 from typing import Any
 
 from rich.markdown import Markdown
+from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
@@ -16,11 +17,83 @@ from textual.widgets import DataTable, Footer, RichLog, Static
 import jobsview
 
 
+class ReviewQueue(DataTable):
+    """The queue, which sizes its own columns.
+
+    Textual 8.2.8 has no fractional column widths, so a fixed set of widths
+    cannot reflow: widths big enough to read also sum to more cells than an
+    ordinary terminal hands the queue, and Textual does not draw the columns
+    past that point -- at 140 columns it drew four of the eight, silently
+    removing Pay, Job family, Decision and Status, the two axes this screen
+    exists to show, with no key that reached them. The table therefore derives
+    its widths from the space it really has, and the weights say who squeezes
+    first: Title, Company and the axes hold their width, and the columns whose
+    full value the detail pane already shows pay for it.
+
+    The resize handler lives here rather than on the App because App defines
+    `_on_resize`, which shadows a subclass's `on_resize` -- a handler on the App
+    is silently never called.
+    """
+
+    COLUMNS = (
+        ("Title", "title", 4),
+        ("Company", "company", 4),
+        ("Location", "location", 2),
+        ("Date", "date", 3),
+        ("Pay", "pay", 2),
+        ("Family", "family", 2),
+        ("Decision", "decision", 3),
+        ("Status", "status", 4),
+    )
+    TOTAL_WEIGHT = sum(weight for _, _, weight in COLUMNS)
+    # Content widths; padding is accounted for separately. The important
+    # scan fields and the date fit in an ordinary terminal; other values are
+    # complete in the selected row's detail pane.
+    MIN_WIDTHS = (9, 7, 3, 10, 3, 6, 10, 8)
+    MIN_WIDTH = 4
+    _sized_to = 0
+
+    def on_mount(self) -> None:
+        for label, key, _weight in self.COLUMNS:
+            self.add_column(label, key=key, width=self.MIN_WIDTH)
+
+    def on_resize(self, _event: events.Resize) -> None:
+        self.distribute_columns()
+
+    def distribute_columns(self) -> None:
+        """Size the columns to the width the queue actually has."""
+        available = self.size.width
+        if available <= 0 or available == self._sized_to:
+            return
+        self._sized_to = available
+        if len(self.columns) != len(self.COLUMNS):
+            return
+        padding = 2 * self.cell_padding * len(self.COLUMNS)
+        content_width = available - padding
+        minimums = self.MIN_WIDTHS
+        extra = max(0, content_width - sum(minimums))
+        widths = [
+            minimum + extra * weight // self.TOTAL_WEIGHT
+            for minimum, (_, _, weight) in zip(minimums, self.COLUMNS)
+        ]
+        remainder = extra - sum(
+            width - minimum for width, minimum in zip(widths, minimums)
+        )
+        for index in range(remainder):
+            widths[index] += 1
+        # If minimums don't fit, retain readable cells and let the user scroll.
+        for column, width in zip(self.columns.values(), widths):
+            column.width = width
+        self.refresh(layout=True)
+
+
 class ReviewBenchApp(App[None]):
     """Keyboard-driven queue over the derived jobs index and review sidecar."""
 
     TITLE = "Jobs review bench"
     BINDINGS = [
+        Binding("left", "scroll_queue_left", "Scroll left", show=False, priority=True),
+        Binding("right", "scroll_queue_right", "Scroll right", show=False, priority=True),
         Binding("j", "next_row", "Next", show=True, priority=True),
         Binding("down", "next_row", "Next", show=False, priority=True),
         Binding("k", "previous_row", "Previous", show=True, priority=True),
@@ -31,12 +104,17 @@ class ReviewBenchApp(App[None]):
         Binding("y", "keep", "Keep", show=True, priority=True),
         Binding("f", "false_positive", "False positive", show=True, priority=True),
         Binding("u", "unreviewed", "Unreviewed", show=False, priority=True),
-        Binding("a", "applied", "Applied", show=True, priority=True),
-        Binding("i", "interview", "Interview", show=True, priority=True),
-        Binding("o", "offer", "Offer", show=True, priority=True),
-        Binding("r", "rejected", "Rejected", show=True, priority=True),
-        Binding("w", "withdrawn", "Withdrawn", show=True, priority=True),
-        Binding("0", "none", "None", show=True, priority=True),
+        # One key per application status, but not one footer slot each: sixteen
+        # shown bindings run past a 140-column footer, which silently dropped
+        # Withdrawn, None, Undo and Quit off the right-hand end. Undo is the
+        # safety net for a mis-keyed `f`, so the keys keep working and the
+        # footer keeps the bindings that protect the session instead.
+        Binding("a", "applied", "Applied", show=False, priority=True),
+        Binding("i", "interview", "Interview", show=False, priority=True),
+        Binding("o", "offer", "Offer", show=False, priority=True),
+        Binding("r", "rejected", "Rejected", show=False, priority=True),
+        Binding("w", "withdrawn", "Withdrawn", show=False, priority=True),
+        Binding("0", "none", "None", show=False, priority=True),
         Binding("n", "none", "None", show=False, priority=True),
         Binding("ctrl+z", "undo", "Undo", show=True, priority=True),
         Binding("escape", "quit", "Quit", show=True),
@@ -69,26 +147,18 @@ class ReviewBenchApp(App[None]):
             id="filters",
         )
         with Horizontal(id="workspace"):
-            yield DataTable(id="queue", cursor_type="row", zebra_stripes=True)
+            # The minimum column widths preserve readable cell boundaries;
+            # at a very narrow queue they intentionally overflow and scroll.
+            yield ReviewQueue(
+                id="queue", cursor_type="row", zebra_stripes=True, cell_padding=1,
+            )
             yield RichLog(id="description", wrap=True, markup=False)
         yield Static(id="counts")
         yield Static("Ready — Space cycles the review decision; Ctrl-Z undoes.", id="undo-status")
         yield Static("Recent: none", id="recent")
-        yield Footer()
+        yield Footer(compact=True)
 
     def on_mount(self) -> None:
-        table = self.query_one("#queue", DataTable)
-        for label, key, width in (
-            ("Title", "title", 24),
-            ("Company", "company", 20),
-            ("Location", "location", 18),
-            ("Date", "date", 11),
-            ("Pay", "pay", 14),
-            ("Job family", "family", 26),
-            ("Decision", "decision", 16),
-            ("Status", "status", 13),
-        ):
-            table.add_column(label, key=key, width=width)
         self._reload_queue()
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
@@ -219,6 +289,12 @@ class ReviewBenchApp(App[None]):
 
     def action_previous_row(self) -> None:
         self._move(-1)
+
+    def action_scroll_queue_left(self) -> None:
+        self.query_one("#queue", ReviewQueue).scroll_left(animate=False, force=True)
+
+    def action_scroll_queue_right(self) -> None:
+        self.query_one("#queue", ReviewQueue).scroll_right(animate=False, force=True)
 
     def action_show_detail(self) -> None:
         self.set_focus(self.query_one("#description", RichLog))

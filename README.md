@@ -138,8 +138,9 @@ make bench-setup
 always reads and writes decisions in `data/review.db`. Space cycles the review
 decision (`unreviewed → keep → false_positive`), `y`/`f` set one directly, one
 key per application status (`a` applied, `i` interview, `o` offer, `r` rejected,
-`w` withdrawn, `0` none), `j`/`k` and the arrows move, `enter` opens the detail
-pane, `v` opens the job in a browser, and `Ctrl-Z` undoes the last action.
+`w` withdrawn, `0` none), `j`/`k` and up/down move, left/right scroll the queue when
+the terminal is too narrow to show every column, `enter` focuses the detail pane,
+`v` opens the job in a browser, and `Ctrl-Z` undoes the last action.
 After any action the cursor advances to the next unreviewed row.
 
 `jobsview review --list` prints the same queue as one line per job, joined with
