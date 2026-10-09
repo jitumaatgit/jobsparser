@@ -490,8 +490,16 @@ def cmd_review(args) -> int:
             return rc
     if getattr(args, "list", False):
         return cmd_review_list(args)
-    print("nothing to do -- try: python3 jobsview.py review --list", file=sys.stderr)
-    return 2
+    try:
+        import textual  # noqa: F401 -- keep the optional dependency inside this command
+        from jobsview_tui import ReviewBenchApp
+    except ModuleNotFoundError as err:
+        if err.name != "textual":
+            raise
+        print("Textual is not installed; run: make bench-setup", file=sys.stderr)
+        return 1
+    ReviewBenchApp(args).run()
+    return 0
 
 
 def _family_label(r) -> str:
@@ -499,6 +507,26 @@ def _family_label(r) -> str:
     if r["job_family_source"] == "inferred":
         return f"{r['job_family'] or '(unknown)'} (inferred)"
     return r["job_family"] or "(unknown)"
+
+
+def _review_rows(con, db_path):
+    """Joined queue rows, including optional CSV details for the bench."""
+    con.execute("ATTACH DATABASE ? AS jobs", (str(Path(db_path)),))
+    con.row_factory = sqlite3.Row
+    columns = {row[1] for row in con.execute("PRAGMA jobs.table_info(jobs)")}
+    details = ("job_url_direct", "search_term", "term_label", "description")
+    optional = ", ".join(
+        f"j.{column}" if column in columns else f"NULL AS {column}"
+        for column in details
+    )
+    return con.execute(
+        "SELECT j.job_url, j.title, j.company, j.location, j.date_posted, "
+        "j.job_family, j.job_family_source, j.last_run, "
+        "j.hourly_min, j.hourly_max, j.annual_min, j.annual_max, "
+        "r.decision, r.application_status, " + optional + " "
+        "FROM jobs.jobs j LEFT JOIN jobs_review r ON r.job_url = j.job_url "
+        "ORDER BY j.rowid"
+    ).fetchall()
 
 
 def cmd_review_list(args) -> int:
@@ -519,21 +547,9 @@ def cmd_review_list(args) -> int:
         print(f"cannot open {db}: {err}", file=sys.stderr)
         return 1
     try:
-        con.execute("ATTACH DATABASE ? AS jobs", (str(Path(args.db)),))
-        con.row_factory = sqlite3.Row
-        rows = con.execute(
-            "SELECT j.job_url, j.title, j.company, j.location, j.date_posted, "
-            "j.job_family, j.job_family_source, j.last_run, "
-            "j.hourly_min, j.hourly_max, j.annual_min, j.annual_max, "
-            "r.decision, r.application_status "
-            "FROM jobs.jobs j LEFT JOIN jobs_review r ON r.job_url = j.job_url "
-            "ORDER BY j.rowid"
-        ).fetchall()
+        rows = _review_rows(con, args.db)
     except sqlite3.Error as err:
-        # Two different failures land here. The index cannot be opened at all,
-        # or it was built from a CSV header that lacks a column the queue
-        # shows -- which is what sqlite's own message reports, so claim
-        # neither, and let it through instead of burying it.
+        # Let sqlite's specific join or schema message through unchanged.
         print(f"cannot list the queue from {Path(args.db)}: {err}", file=sys.stderr)
         return 1
     finally:
@@ -735,10 +751,10 @@ def main(argv=None) -> int:
 
     p_stats = sub.add_parser("stats", help="coverage + employer concentration")
     p_stats.set_defaults(func=cmd_stats)
-    p_review = sub.add_parser("review", help="the review queue: jobs.db joined with the store")
+    p_review = sub.add_parser("review", help="the review bench: work the queue in a TUI")
     p_review.add_argument(
         "--list", action="store_true",
-        help="print one line per job, joined with the review store",
+        help="print the joined queue as text instead of launching the bench",
     )
     p_review.set_defaults(func=cmd_review)
 

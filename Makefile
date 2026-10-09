@@ -7,7 +7,7 @@ DISTANCE ?= 10
 OUTPUT_DIR ?= data
 
 # Local-only tooling. This fork is not published to PyPI; it runs from source.
-.PHONY: setup scrape clean
+.PHONY: setup scrape index viewer-setup bench-setup view clean
 setup:
 	python3 -m venv .venv
 	.venv/bin/pip install -e ./jobsparser
@@ -25,6 +25,19 @@ scrape:
 		--indeed-country $(INDEED_COUNTRY) \
 		--distance $(DISTANCE) \
 		--output-dir $(OUTPUT_DIR)
+
+index:
+	python3 jobsview.py ingest
+
+viewer-setup:
+	.venv/bin/pip install 'datasette>=0.65.2,<1'
+
+bench-setup:
+	.venv/bin/pip install 'textual>=8.2.8'
+
+view: index
+	@test -x .venv/bin/datasette || { echo "Datasette not installed. Run: make viewer-setup" >&2; exit 1; }
+	.venv/bin/datasette serve data/jobs.db --host 127.0.0.1 --port 8001
 
 clean:
 	rm -rf build dist *.egg-info jobsparser/src/*.egg-info

@@ -256,11 +256,6 @@ class ReviewStoreTest(unittest.TestCase):
             self.assertIn("cannot open", second.stderr)
             self.assertNotIn("Traceback", second.stderr)
 
-    def test_review_without_list_does_nothing(self):
-        self.write_csv(_row("https://indeed.com/job/one", "Cashier - Grocery"))
-        proc = self.run_cli("review")
-        self.assertEqual(2, proc.returncode)
-        self.assertIn("review --list", proc.stderr)
 
 
 if __name__ == "__main__":

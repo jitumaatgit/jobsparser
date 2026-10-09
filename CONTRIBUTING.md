@@ -62,6 +62,27 @@ The files under `.scratch/fork-assessment/` are **not** a test suite. They are l
 probes against Indeed that print findings and assert nothing; each one costs real
 requests, so run them by hand.
 
+## Review bench
+
+`jobsview review` is a Textual TUI. Textual is **not** a dependency of the `jobsparser`
+package and is never added to `jobsparser/pyproject.toml`; install it into `.venv` on its
+own:
+
+```bash
+make bench-setup
+.venv/bin/python jobsview.py review
+```
+
+`jobsview.py`'s other subcommands stay stdlib-only. The TUI lives in `jobsview_tui.py` and
+Textual is imported inside the `review` command, so `jobsview search` still runs where
+Textual is not installed, and `jobsview review` there exits with a one-line
+`make bench-setup` message instead of a traceback.
+
+Decisions and application statuses are written to `data/review.db`, a sidecar keyed on
+`job_url` — never to `data/jobs.db`, which `jobsview ingest` unlinks and rebuilds. The TUI
+is exercised headlessly in `test_review_bench.py` with Textual's `App.run_test()` pilot;
+that covers the queue, the keys and undo without a terminal.
+
 ## Notes
 
 - The CSV is rewritten after every search term, so a long multi-term run keeps completed
