@@ -36,25 +36,22 @@ class ReviewQueue(DataTable):
     """
 
     COLUMNS = (
-        ("Title", "title", 4),
-        ("Company", "company", 4),
-        ("Location", "location", 2),
-        ("Date", "date", 3),
-        ("Pay", "pay", 2),
-        ("Family", "family", 2),
-        ("Decision", "decision", 3),
-        ("Status", "status", 4),
+        # label, key, width weight, minimum content width
+        ("Title", "title", 4, 9),
+        ("Company", "company", 4, 7),
+        ("Location", "location", 2, 3),
+        ("Date", "date", 3, 10),
+        ("Pay", "pay", 2, 3),
+        ("Job family", "family", 2, 10),
+        ("Decision", "decision", 3, 10),
+        ("Status", "status", 4, 8),
     )
-    TOTAL_WEIGHT = sum(weight for _, _, weight in COLUMNS)
-    # Content widths; padding is accounted for separately. The important
-    # scan fields and the date fit in an ordinary terminal; other values are
-    # complete in the selected row's detail pane.
-    MIN_WIDTHS = (9, 7, 3, 10, 3, 6, 10, 8)
+    TOTAL_WEIGHT = sum(weight for _, _, weight, _ in COLUMNS)
     MIN_WIDTH = 4
-    _sized_to = 0
+    _last_sized_width = 0
 
     def on_mount(self) -> None:
-        for label, key, _weight in self.COLUMNS:
+        for label, key, _weight, _minimum in self.COLUMNS:
             self.add_column(label, key=key, width=self.MIN_WIDTH)
 
     def on_resize(self, _event: events.Resize) -> None:
@@ -63,21 +60,22 @@ class ReviewQueue(DataTable):
     def distribute_columns(self) -> None:
         """Size the columns to the width the queue actually has."""
         available = self.size.width
-        if available <= 0 or available == self._sized_to:
+        if available <= 0 or available == self._last_sized_width:
             return
-        self._sized_to = available
+        self._last_sized_width = available
         if len(self.columns) != len(self.COLUMNS):
             return
         padding = 2 * self.cell_padding * len(self.COLUMNS)
         content_width = available - padding
-        minimums = self.MIN_WIDTHS
-        extra = max(0, content_width - sum(minimums))
+        minimum_width = sum(minimum for _, _, _, minimum in self.COLUMNS)
+        extra = max(0, content_width - minimum_width)
         widths = [
             minimum + extra * weight // self.TOTAL_WEIGHT
-            for minimum, (_, _, weight) in zip(minimums, self.COLUMNS)
+            for _, _, weight, minimum in self.COLUMNS
         ]
         remainder = extra - sum(
-            width - minimum for width, minimum in zip(widths, minimums)
+            width - minimum
+            for width, (_, _, _, minimum) in zip(widths, self.COLUMNS)
         )
         for index in range(remainder):
             widths[index] += 1

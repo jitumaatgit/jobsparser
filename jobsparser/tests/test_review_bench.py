@@ -214,13 +214,14 @@ class ReviewBenchTest(unittest.IsolatedAsyncioTestCase):
                 ["title", "company", "location", "date", "pay", "family", "decision", "status"],
                 list(table.columns.keys()),
             )
+            self.assertGreaterEqual(widths["family"], len("Job family"))
             self.assertLessEqual(
                 sum(widths.values()), table.size.width,
                 "a column past the queue's width is not drawn, it is simply lost",
             )
-            # The axes must never be the columns that absorb the squeeze.
-            for axis in ("decision", "status"):
-                self.assertGreaterEqual(widths[axis], len("unreviewed"), axis)
+            # Decision displays `unreviewed`; status displays `interview`.
+            self.assertGreaterEqual(widths["decision"], len("unreviewed"))
+            self.assertGreaterEqual(widths["status"], len("interview"))
 
     async def test_the_columns_reflow_when_the_terminal_is_resized(self):
         self.build_index([_row("one", "Cashier One"), _row("two", "Cashier Two")])
