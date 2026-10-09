@@ -92,6 +92,8 @@ class ReviewBenchApp(App[None]):
     BINDINGS = [
         Binding("left", "scroll_queue_left", "Scroll left", show=False, priority=True),
         Binding("right", "scroll_queue_right", "Scroll right", show=False, priority=True),
+        Binding("ctrl+k", "scroll_detail_up", "Detail up", show=False, priority=True),
+        Binding("ctrl+j", "scroll_detail_down", "Detail down", show=False, priority=True),
         Binding("j", "next_row", "Next", show=True, priority=True),
         Binding("down", "next_row", "Next", show=False, priority=True),
         Binding("k", "previous_row", "Previous", show=True, priority=True),
@@ -124,7 +126,8 @@ class ReviewBenchApp(App[None]):
     #filters { height: 1; padding: 0 1; background: $panel; }
     #workspace { height: 1fr; }
     #queue { width: 3fr; height: 1fr; }
-    #description { width: 2fr; height: 1fr; border: round $accent; padding: 0 1; }
+    #description { width: 2fr; height: 1fr; border: round $border; padding: 0 1; }
+    #description:focus { border: round $accent; }
     #counts, #undo-status, #recent { height: 1; padding: 0 1; }
     #undo-status { color: $text; }
     #recent { color: $text-muted; }
@@ -294,8 +297,17 @@ class ReviewBenchApp(App[None]):
     def action_scroll_queue_right(self) -> None:
         self.query_one("#queue", ReviewQueue).scroll_right(animate=False, force=True)
 
+    def action_scroll_detail_up(self) -> None:
+        self.query_one("#description", RichLog).scroll_up(animate=False)
+
+    def action_scroll_detail_down(self) -> None:
+        self.query_one("#description", RichLog).scroll_down(animate=False)
+
     def action_show_detail(self) -> None:
-        self.set_focus(self.query_one("#description", RichLog))
+        """Toggle keyboard focus; the detail pane remains visible."""
+        table = self.query_one("#queue", ReviewQueue)
+        detail = self.query_one("#description", RichLog)
+        self.set_focus(table if self.focused is detail else detail)
 
     def action_open_job(self) -> None:
         row = self._current()

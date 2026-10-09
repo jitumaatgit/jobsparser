@@ -191,6 +191,59 @@ class ReviewBenchTest(unittest.IsolatedAsyncioTestCase):
         second_line = next(line for line in state.splitlines() if "job/two" in line)
         self.assertIn("false_positive", second_line)
 
+    async def test_enter_toggles_focus_between_job_list_and_detail(self):
+        app = self.app_with_two_rows()
+
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            table = app.query_one("#queue", DataTable)
+            detail = app.query_one("#description", RichLog)
+            self.assertIs(app.focused, table)
+            list_screen = app.export_screenshot()
+
+            await pilot.press("enter")
+            await pilot.pause()
+            self.assertIs(app.focused, detail)
+            detail_screen = app.export_screenshot()
+            self.assertNotEqual(
+                list_screen, detail_screen,
+                "Enter must make the detail-focus change visible",
+            )
+
+            await pilot.press("enter")
+            await pilot.pause()
+            self.assertIs(app.focused, table)
+
+    async def test_ctrl_jk_scrolls_detail_without_leaving_the_job_list(self):
+        description = "\n\n".join(
+            f"## Section {index}\n\n- Long detail section {index}."
+            for index in range(40)
+        )
+        self.build_index([_row("one", "Cashier One", description=description)])
+        app = ReviewBenchApp(self.args)
+
+        async with app.run_test(size=(120, 18)) as pilot:
+            await pilot.pause()
+            table = app.query_one("#queue", DataTable)
+            detail = app.query_one("#description", RichLog)
+            self.assertIs(app.focused, table)
+            self.assertGreater(detail.scroll_y, 0, "long detail starts with content below view")
+            initial_scroll = detail.scroll_y
+            initial_row = table.cursor_row
+
+            await pilot.press("ctrl+k")
+            await pilot.pause()
+            self.assertIs(app.focused, table, "scrolling details must retain list focus")
+            self.assertLess(detail.scroll_y, initial_scroll)
+            self.assertEqual(initial_row, table.cursor_row)
+
+            scroll_up = detail.scroll_y
+            await pilot.press("ctrl+j")
+            await pilot.pause()
+            self.assertIs(app.focused, table)
+            self.assertGreater(detail.scroll_y, scroll_up)
+            self.assertEqual(initial_row, table.cursor_row)
+
     def _two_thousand(self):
         self.build_index([_row(str(n), f"Cashier {n:04}") for n in range(2000)])
         return ReviewBenchApp(self.args)
