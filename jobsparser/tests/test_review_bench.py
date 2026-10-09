@@ -75,6 +75,10 @@ class ReviewBenchTest(unittest.IsolatedAsyncioTestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(0, jobsview.cmd_ingest(self.args))
 
+    def app_with_two_rows(self):
+        self.build_index([_row("one", "Cashier One"), _row("two", "Cashier Two")])
+        return ReviewBenchApp(self.args)
+
     def selected_title(self, app):
         table = app.query_one("#queue", DataTable)
         cell = table.get_row_at(table.cursor_row)[0]
@@ -202,8 +206,7 @@ class ReviewBenchTest(unittest.IsolatedAsyncioTestCase):
         # Pay, Job family, Decision and Status were absent from the screen, the
         # two axes that are the whole point, with no key that reached them.
         # Widths must therefore be derived from the space actually there.
-        self.build_index([_row("one", "Cashier One"), _row("two", "Cashier Two")])
-        app = ReviewBenchApp(self.args)
+        app = self.app_with_two_rows()
 
         async with app.run_test(size=(140, 40)) as pilot:
             await pilot.pause()
@@ -224,8 +227,7 @@ class ReviewBenchTest(unittest.IsolatedAsyncioTestCase):
             self.assertGreaterEqual(widths["status"], len("interview"))
 
     async def test_the_columns_reflow_when_the_terminal_is_resized(self):
-        self.build_index([_row("one", "Cashier One"), _row("two", "Cashier Two")])
-        app = ReviewBenchApp(self.args)
+        app = self.app_with_two_rows()
 
         async with app.run_test(size=(140, 40)) as pilot:
             await pilot.pause()
@@ -252,8 +254,7 @@ class ReviewBenchTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(narrow), len(wide))
 
     async def test_a_narrow_terminal_keeps_columns_reachable_by_arrow_keys(self):
-        self.build_index([_row("one", "Cashier One"), _row("two", "Cashier Two")])
-        app = ReviewBenchApp(self.args)
+        app = self.app_with_two_rows()
 
         async with app.run_test(size=(62, 28)) as pilot:
             await pilot.pause()
@@ -276,8 +277,7 @@ class ReviewBenchTest(unittest.IsolatedAsyncioTestCase):
         # The original sixteen shown bindings ran past a 140-column footer,
         # hiding Undo and Quit even though undo is the safety net for a mis-keyed
         # `f`.
-        self.build_index([_row("one", "Cashier One"), _row("two", "Cashier Two")])
-        app = ReviewBenchApp(self.args)
+        app = self.app_with_two_rows()
 
         async with app.run_test(size=(140, 40)) as pilot:
             await pilot.pause()
