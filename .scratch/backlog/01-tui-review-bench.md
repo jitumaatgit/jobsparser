@@ -1,13 +1,20 @@
 ---
-Status: ready-for-agent
+Status: resolved
 Type: task
 Created: 2026-10-03
-Deferred: until the current job search settles
+Picked-up: 2026-10-08
+Superseded-by: ../review-bench/spec.md
 ---
 
 # TUI review bench over jobsparser CSVs
 
-A terminal UI for triaging scraped job results. **Nice to have — not started.**
+**Picked up on 2026-10-08.** The questions sketched here were settled in a design
+interview; the feature now lives at [`../review-bench/spec.md`](../review-bench/spec.md)
+with per-ticket issues in [`../review-bench/issues/`](../review-bench/issues/). Two of the
+decisions sketched below changed: the bench also tracks **application status**, which this
+ticket never considered, and the job family label comes from `queries.txt` headers passed
+by the CLI rather than being parsed by the bench. The reason is in
+`docs/adr/0002-replace-sheets-review-pipeline.md`. Kept below as the original sketch.
 
 ## Why this exists
 

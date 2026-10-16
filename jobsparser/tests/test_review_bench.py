@@ -20,7 +20,7 @@ import jobsview  # noqa: E402
 # plain `make setup`.
 try:
     from jobsview_tui import ReviewBenchApp
-    from textual.widgets import DataTable, RichLog, Static
+    from textual.widgets import DataTable, Input, RichLog, Static
 except ModuleNotFoundError:  # pragma: no cover - the skip below covers this
     ReviewBenchApp = DataTable = RichLog = Static = None
 
@@ -52,6 +52,12 @@ def _row(number, title, **overrides):
     }
     row.update(overrides)
     return row
+
+
+async def type_in_bar(pilot, term: str) -> None:
+    """Type a search term into the filter bar the way a keyboard does."""
+    for character in term:
+        await pilot.press("space" if character == " " else character)
 
 
 @BENCH
@@ -184,7 +190,7 @@ class ReviewBenchTest(unittest.IsolatedAsyncioTestCase):
                 await pilot.press("j")
                 await pilot.press("v")
                 open_url.assert_called_with("https://indeed.com/job/two")
-                await pilot.press("f")
+                await pilot.press("x")
                 await pilot.pause()
 
         state = self.listing()
@@ -328,8 +334,8 @@ class ReviewBenchTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_the_footer_keeps_the_safety_net_on_an_ordinary_terminal(self):
         # The original sixteen shown bindings ran past a 140-column footer,
-        # hiding Undo and Quit even though undo is the safety net for a mis-keyed
-        # `f`.
+        # hiding Undo and Quit even though undo is the safety net for a
+        # mis-keyed `x`.
         app = self.app_with_two_rows()
 
         async with app.run_test(size=(140, 40)) as pilot:
@@ -338,6 +344,263 @@ class ReviewBenchTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("Undo", screen)
         self.assertIn("Quit", screen)
+        # The filters are ticket 06's contribution to the one line that says
+        # what the queue is; they must not push the safety net off it.
+        for binding in ("Search", "Family", "Decided", "Clear"):
+            self.assertIn(binding, screen)
+
+    # -- filters (ticket 06) -------------------------------------------------
+
+    def build_index_with_families(self):
+        # Three families, one of them (unknown); row three mentions "bakery"
+        # only in its description, so it is the row a search must NOT match.
+        self.build_index([
+            _row("one", "Cashier One", company="Bakery Corner", term_label="Retail"),
+            _row("two", "Baker Two", company="Example Employer", term_label="Bakery"),
+            _row(
+                "three", "Dishwasher Three", company="Sunrise Diner",
+                term_label="", search_term='"dishwasher"',
+                description="Only the description says bakery.",
+            ),
+        ])
+
+    def titles(self, app):
+        """Every title in the queue, in order -- the queue as it stands."""
+        table = app.query_one("#queue", DataTable)
+        out = []
+        for index in range(table.row_count):
+            cell = table.get_row_at(index)[0]
+            out.append(cell.plain if hasattr(cell, "plain") else str(cell))
+        return out
+
+    def header(self, app):
+        return str(app.query_one("#filters", Static).render())
+
+    def recent_footer(self, app):
+        return str(app.query_one("#recent", Static).render())
+
+    async def test_a_search_term_narrows_to_title_and_company_matches(self):
+        # `jobsview search --match` minus FTS: title and company, never the
+        # description. Row three says "bakery" only in its description.
+        self.build_index_with_families()
+        app = ReviewBenchApp(self.args)
+
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("/")
+            await pilot.pause()
+            bar = app.query_one("#search", Input)
+            self.assertIs(app.focused, bar, "/ must open the filter bar")
+            self.assertTrue(bar.display)
+
+            await type_in_bar(pilot, "bakery")
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+
+            self.assertEqual(
+                ["Cashier One"], self.titles(app),
+                "the row that says it only in the description is not a match",
+            )
+            self.assertFalse(bar.display, "Enter closes the bar again")
+            self.assertIs(app.focused, app.query_one("#queue", DataTable))
+            self.assertIn('title/company="bakery"', self.header(app))
+
+            await pilot.press("escape")
+            await pilot.pause()
+            self.assertEqual(["Cashier One", "Baker Two", "Dishwasher Three"], self.titles(app))
+            self.assertEqual(
+                "Queue: decision=unreviewed | job family=all | title/company=all",
+                self.header(app),
+            )
+
+    async def test_search_is_typed_into_the_bar_and_not_the_queue(self):
+        # The bar's keys must reach the bar: `j`, `a`, `k` and `space` are
+        # queue keys, and a search term is made of exactly those letters.
+        self.build_index([
+            _row("one", "Cashier One", company="Bakery Corner"),
+            _row("two", "Jas Baker", company="Cafe"),
+        ])
+        app = ReviewBenchApp(self.args)
+
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("/")
+            await pilot.pause()
+            await type_in_bar(pilot, "jas baker")
+            await pilot.pause()
+
+            self.assertEqual("jas baker", app.query_one("#search", Input).value)
+            self.assertEqual(["Jas Baker"], self.titles(app))
+            self.assertEqual(0, app.query_one("#queue", DataTable).cursor_row)
+            # The keys never reached the queue: nothing moved, nothing was set.
+            state = self.listing()
+            first_line = next(line for line in state.splitlines() if "job/one" in line)
+            self.assertIn("unreviewed", first_line)
+            self.assertIn("none", first_line)
+
+    async def test_family_filter_cycles_the_families_the_queue_offers(self):
+        self.build_index_with_families()
+        app = ReviewBenchApp(self.args)
+
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            self.assertEqual(["Cashier One", "Baker Two", "Dishwasher Three"], self.titles(app))
+
+            await pilot.press("f")
+            await pilot.pause()
+            self.assertEqual(["Baker Two"], self.titles(app), "first family, alphabetically")
+            self.assertIn("job family=Bakery", self.header(app))
+
+            await pilot.press("f")
+            await pilot.pause()
+            self.assertEqual(["Cashier One"], self.titles(app))
+            self.assertIn("job family=Retail", self.header(app))
+
+            # (unknown) is offered last so those rows stay reachable.
+            await pilot.press("f")
+            await pilot.pause()
+            self.assertEqual(["Dishwasher Three"], self.titles(app))
+            self.assertIn("job family=(unknown)", self.header(app))
+
+            await pilot.press("f")
+            await pilot.pause()
+            self.assertEqual(
+                ["Cashier One", "Baker Two", "Dishwasher Three"], self.titles(app),
+                "the walk ends back on every family",
+            )
+            self.assertIn("job family=all", self.header(app))
+
+    async def test_the_decision_filter_cycles_to_decided_rows_and_back(self):
+        self.build_index([
+            _row("one", "Cashier One"),
+            _row("two", "Cashier Two"),
+            _row("three", "Cashier Three"),
+        ])
+        app = ReviewBenchApp(self.args)
+
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("y")
+            await pilot.pause()
+            self.assertEqual(["Cashier Two", "Cashier Three"], self.titles(app))
+
+            await pilot.press("d")
+            await pilot.pause()
+            self.assertEqual(["Cashier One"], self.titles(app))
+            self.assertIn("decision=keep", self.header(app))
+            self.assertIn("Showing: 1 of 3", str(app.query_one("#counts", Static).render()))
+
+            await pilot.press("d")
+            await pilot.pause()
+            self.assertEqual([], self.titles(app), "nothing is a false positive yet")
+
+            await pilot.press("d")
+            await pilot.pause()
+            self.assertEqual(["Cashier One", "Cashier Two", "Cashier Three"], self.titles(app))
+            self.assertIn("decision=all", self.header(app))
+
+            await pilot.press("d")
+            await pilot.pause()
+            self.assertEqual(
+                ["Cashier Two", "Cashier Three"], self.titles(app),
+                "and back to the opening queue",
+            )
+            self.assertIn("decision=unreviewed", self.header(app))
+
+    async def test_the_decision_cycle_is_observable_once_decisions_are_shown(self):
+        # Ticket 05 recorded that `space`'s cycle could not be seen on an
+        # unreviewed-only queue: one press set keep and the row left. With a
+        # decision filter, the same row can be cycled twice.
+        self.build_index([_row("one", "Cashier One"), _row("two", "Cashier Two")])
+        app = ReviewBenchApp(self.args)
+
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            for _ in range(3):
+                await pilot.press("d")  # unreviewed -> keep -> false_positive -> all
+            await pilot.pause()
+            self.assertEqual(["Cashier One", "Cashier Two"], self.titles(app))
+
+            await pilot.press("space")
+            await pilot.pause()
+            self.assertEqual(
+                ["Cashier One", "Cashier Two"], self.titles(app),
+                "a row that gains a decision stays visible on an `all` queue",
+            )
+            state = self.listing()
+            first_line = next(line for line in state.splitlines() if "job/one" in line)
+            self.assertIn("keep", first_line)
+            self.assertEqual(
+                "Cashier Two", self.selected_title(app), "the cursor still advances"
+            )
+
+    async def test_filters_combine_and_keep_order_and_the_cursors_row(self):
+        self.build_index_with_families()
+        app = ReviewBenchApp(self.args)
+
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("j")
+            await pilot.pause()
+            self.assertEqual("Baker Two", self.selected_title(app))
+
+            # A conjunction: a term that matches two of the three rows, and
+            # a family filter that takes one of those two away.
+            await pilot.press("/")
+            await pilot.pause()
+            await type_in_bar(pilot, "bake")
+            await pilot.press("enter")  # close the bar; `f` is a queue key
+            await pilot.pause()
+            self.assertEqual(
+                ["Cashier One", "Baker Two"], self.titles(app),
+                "the term narrows by title or company, never by description",
+            )
+            self.assertEqual("Baker Two", self.selected_title(app))
+
+            await pilot.press("f")
+            await pilot.pause()
+            self.assertEqual(["Baker Two"], self.titles(app))
+            self.assertIn("job family=Bakery", self.header(app))
+            self.assertEqual(
+                "Baker Two", self.selected_title(app),
+                "the cursor keeps its row while that row is still visible",
+            )
+
+            # A term that drops the cursor's row keeps its position instead.
+            await pilot.press("escape")
+            await pilot.pause()
+            self.assertEqual(
+                ["Cashier One", "Baker Two", "Dishwasher Three"], self.titles(app),
+                "Escape clears the family filter too",
+            )
+            await pilot.press("j")
+            await pilot.pause()
+            await pilot.press("/")
+            await pilot.pause()
+            await type_in_bar(pilot, "cashier one")
+            await pilot.pause()
+            self.assertEqual(["Cashier One"], self.titles(app))
+            self.assertEqual(
+                "Cashier One", self.selected_title(app),
+                "a row that leaves the queue leaves its position behind",
+            )
+
+
+    async def test_escape_does_not_quit_and_q_quits(self):
+        app = self.app_with_two_rows()
+
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            self.assertTrue(app.is_running)
+
+            await pilot.press("escape")
+            await pilot.pause()
+            self.assertTrue(app.is_running, "Escape should be safe to press reflexively")
+
+            await pilot.press("q")
+            await pilot.pause()
+            self.assertFalse(app.is_running)
 
     async def test_two_thousand_rows_navigate_the_virtual_table(self):
         app = self._two_thousand()
@@ -373,7 +636,7 @@ class ReviewBenchTest(unittest.IsolatedAsyncioTestCase):
                 added.append(cells), add_row(*cells, **kwargs)
             )[1]
 
-            await pilot.press("f")
+            await pilot.press("x")
             await pilot.pause()
 
             self.assertEqual([], added, "one decision must not rebuild the table")
@@ -401,6 +664,189 @@ class ReviewBenchTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(0, jobsview.cmd_review(self.args))
         self.assertIn("job/one", out.getvalue())
 
+    async def test_a_search_term_of_console_markup_renders_literally(self):
+        # The search bar takes arbitrary typing, and a `[` `]` pair reaches the
+        # header. Textual parses plain strings as console markup, so `[/]`
+        # raised MarkupError inside the keystroke handler and `[foo]bar` was
+        # silently displayed as "bar". Both are the same one-line bug.
+        self.build_index([
+            _row("one", "Cashier One", company="Bakery Corner"),
+            _row("two", "Baker Two"),
+        ])
+        app = ReviewBenchApp(self.args)
+
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("/")
+            await pilot.pause()
+            for character in "[/]":
+                await pilot.press(character)
+                await pilot.pause()
+            self.assertEqual(
+                'Queue: decision=unreviewed | job family=all | title/company="[/]"',
+                self.header(app),
+                "a term is text, never markup: no error, nothing swallowed",
+            )
+            await pilot.press("backspace")
+            await pilot.pause()
+            for character in "foo]bar":
+                await pilot.press(character)
+                await pilot.pause()
+            self.assertIn('title/company="[/foo]bar"', self.header(app))
+
+    async def test_a_job_title_of_console_markup_renders_literally(self):
+        # The other side of the same bug: titles come out of the index, and
+        # DataTable parsed str cells as markup, so one hostile row took the
+        # whole table down with a MarkupError.
+        self.build_index([
+            _row("one", "Cashier[/red] One"),
+            _row("two", "Cashier Two"),
+        ])
+        app = ReviewBenchApp(self.args)
+
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            self.assertEqual(
+                ["Cashier[/red] One", "Cashier Two"],
+                self.titles(app),
+                "the title reaches the screen byte for byte",
+            )
+
+    async def test_undo_of_a_row_the_filter_now_hides_says_so(self):
+        # Restoring `unreviewed` while the queue is filtered to `keep` leaves
+        # the row outside it. The status bar announced the undo and the row
+        # vanished anyway -- indistinguishable from losing a good job.
+        self.build_index([
+            _row("one", "Cashier One"),
+            _row("two", "Cashier Two"),
+        ])
+        app = ReviewBenchApp(self.args)
+
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("y")      # keep row one, on the unreviewed filter
+            await pilot.pause()
+            self.assertEqual(1, app.query_one("#queue", DataTable).row_count)
+
+            await pilot.press("d")      # filter to decision=keep
+            await pilot.pause()
+            self.assertEqual(["Cashier One"], self.titles(app))
+
+            await pilot.press("ctrl+z")  # undo -> unreviewed, outside the filter
+            await pilot.pause()
+            self.assertEqual(0, app.query_one("#queue", DataTable).row_count)
+            self.assertIn(
+                "hidden by decision=keep; Esc clears it",
+                str(app.query_one("#undo-status", Static).render()),
+                "name the filter that hid the row, and the key that reveals it",
+            )
+
+    async def test_the_undo_note_names_the_filter_that_actually_hid_the_row(self):
+        # The note blamed `decision=<filter>` for whatever hid the row, so a
+        # family or search filter got the decision filter's name. Note that a
+        # row in the queue before the undo only leaves by a filter that moved
+        # *after* the decision was set -- otherwise the undo restores exactly
+        # what the filter already admits, and the note must stay silent.
+        self.build_index_with_families()
+        app = ReviewBenchApp(self.args)
+
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            self.assertEqual(
+                ["Cashier One", "Baker Two", "Dishwasher Three"], self.titles(app)
+            )
+
+            # Readmitted: `keep` -> `unreviewed` on the opening filter keeps the
+            # row in the queue, so there is no cause to name.
+            await pilot.press("y")
+            await pilot.pause()
+            await pilot.press("ctrl+z")
+            await pilot.pause()
+            note = str(app.query_one("#undo-status", Static).render())
+            self.assertIn("Undid Cashier One", note)
+            self.assertNotIn(
+                "hidden by", note, "the row is in the queue: no cause to name"
+            )
+
+            # A family filter that moved after the keep. `all` admits every
+            # decision, so naming the decision filter here would be wrong.
+            await pilot.press("escape")
+            for _ in range(3):       # unreviewed -> keep -> false_positive -> all
+                await pilot.press("d")
+            await pilot.pause()
+            self.assertIn("decision=all", self.header(app))
+            await pilot.press("f")   # Bakery: only Baker Two stays
+            await pilot.pause()
+            self.assertEqual(["Baker Two"], self.titles(app))
+            await pilot.press("y")   # keep the row the filter already admits
+            await pilot.press("f")   # Retail: the kept row is no longer offered
+            await pilot.pause()
+            self.assertEqual(["Cashier One"], self.titles(app))
+            await pilot.press("ctrl+z")  # undo -> unreviewed, and outside Retail
+            await pilot.pause()
+            note = str(app.query_one("#undo-status", Static).render())
+            self.assertNotIn(
+                "decision=", note, "the decision filter admits this row now"
+            )
+            self.assertIn("hidden by job family=Retail; Esc clears it", note)
+
+            # A search term that moved after the keep, which is the case the
+            # decision label got wrong most often.
+            await pilot.press("escape")
+            await pilot.pause()
+            await pilot.press("/")
+            await pilot.pause()
+            bar = app.query_one("#search", Input)
+            bar.value = ""            # the bar keeps the previous term
+            await type_in_bar(pilot, "cashier")
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            self.assertEqual(["Cashier One"], self.titles(app))
+            await pilot.press("y")    # keep Cashier One under that term
+            await pilot.pause()
+
+            await pilot.press("/")    # and a second term in the same bar
+            await pilot.pause()
+            bar.value = ""
+            await type_in_bar(pilot, "dishwasher")
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            await pilot.press("ctrl+z")
+            await pilot.pause()
+            note = str(app.query_one("#undo-status", Static).render())
+            self.assertIn(
+                'hidden by title/company="dishwasher"',
+                note,
+                "the search term is named, not the decision filter",
+            )
+            self.assertIn("; Esc clears it", note)
+
+    async def test_the_recent_footer_renders_a_hostile_title_literally(self):
+        # The third footer had no guard at all: `Recent` prints the last three
+        # titles straight out of the index, and nothing pinned that a title
+        # holding `[/red]` arrives on screen as itself. This is the label whose
+        # content comes from the same untrusted place as the queue cells, so it
+        # is written as `Text` for the same reason they are.
+        self.build_index([
+            _row("one", "Cashier[/red] One"),
+            _row("two", "Cashier Two"),
+        ])
+        app = ReviewBenchApp(self.args)
+
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            self.assertEqual("Recent: none", self.recent_footer(app))
+
+            await pilot.press("y")
+            await pilot.pause()
+            self.assertIn(
+                "Cashier[/red] One: keep / none", self.recent_footer(app),
+                "a title is text, never markup",
+            )
+
+
 class StdlibOnlyTest(unittest.TestCase):
     """The part of the bench contract that must hold with Textual ABSENT.
 
@@ -425,6 +871,35 @@ class StdlibOnlyTest(unittest.TestCase):
         )
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(0, jobsview.cmd_ingest(args))
+
+    def test_search_semantics_stay_stdlib_only(self):
+        # The bench's `/` search runs without Textual: it is one predicate
+        # over rows already loaded, and its semantics are the CLI's LIKE.
+        row = {"title": "Head Baker", "company": "Bakery Corner"}
+
+        self.assertTrue(jobsview.matches_search(row, ""), "no term is no filter")
+        self.assertTrue(jobsview.matches_search(row, "bake"))
+        self.assertTrue(jobsview.matches_search(row, "BAKERY"), "LIKE is case-insensitive")
+        self.assertTrue(jobsview.matches_search(row, "corner"), "company counts")
+        self.assertFalse(jobsview.matches_search(row, "dishwasher"))
+        self.assertFalse(
+            jobsview.matches_search({"title": "Baker", "company": "Acme"}, "baker acme"),
+            "one column at a time, never the two concatenated",
+        )
+        self.assertTrue(jobsview.matches_search(row, "%"), "a bare wildcard matches all")
+        self.assertTrue(jobsview.matches_search({"title": "a_b"}, "a_b"), "`_` is one character")
+        self.assertFalse(
+            jobsview.matches_search({"title": "ab"}, "a_b"), "so it cannot be skipped"
+        )
+        # ASCII-only folding, exactly like SQLite. Python's IGNORECASE folds
+        # all of Unicode, so U+212A (KELVIN SIGN) would otherwise match "k"
+        # in the bench while `SELECT 'K' LIKE '%<u212a>%'` returns 0 in the
+        # CLI -- the bench would quietly show more rows than the CLI would.
+        self.assertFalse(
+            jobsview.matches_search({"title": "\u212a"}, "k"),
+            "non-ASCII case folding would diverge from SQLite's LIKE",
+        )
+        self.assertTrue(jobsview.matches_search({"title": "K"}, "k"), "ASCII still folds")
 
     def test_stdlib_subcommands_run_and_review_explains_setup_without_textual(self):
         command = [

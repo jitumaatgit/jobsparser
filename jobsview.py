@@ -608,6 +608,53 @@ def _print(rows, urls_only: bool = False) -> None:
         print(f"{title} {company} {loc} {date}  {_pay_label(r):<18} {r['job_url']}")
 
 
+# -- the bench's search term -------------------------------------------------
+#
+# The review bench searches the rows it has already loaded -- re-querying
+# SQLite per keystroke would rebuild a 300-row queue on every character. Its
+# search is `jobsview search --match` minus FTS: the same title/company
+# coverage, plain LIKE instead of the FTS5 index, and never the description.
+# The pattern and the matcher are defined here, beside `_build_query`, so one
+# term cannot mean one thing in the CLI and another in the TUI.
+SEARCH_COLUMNS = ("title", "company")
+
+
+def _like_pattern(value: str) -> str:
+    """A user fragment as a LIKE pattern: where the `%` wrap happens."""
+    return f"%{value}%"
+
+
+def _like_matches(pattern: str, value: str) -> bool:
+    """SQLite's LIKE for one pattern/value pair, in memory.
+
+    ASCII case-insensitive with `%` and `_` wildcards: the semantics the CLI
+    hands to SQLite, reproduced for a row that is already loaded.
+
+    `re.ASCII` is load-bearing. Python's IGNORECASE folds all of Unicode, so
+    without it a term matches a strict superset of the CLI's results -- "k"
+    against U+212A (KELVIN SIGN) is True here and 0 in SQLite. Measured.
+    """
+    expression = "".join(
+        ".*" if character == "%"
+        else "." if character == "_"
+        else re.escape(character)
+        for character in pattern
+    )
+    return (
+        re.match(expression, value, re.IGNORECASE | re.ASCII | re.DOTALL) is not None
+    )
+
+
+def matches_search(row, term: str) -> bool:
+    """True when the row's title or company LIKE the search term."""
+    if not term:
+        return True
+    pattern = _like_pattern(term)
+    return any(
+        _like_matches(pattern, row.get(column) or "") for column in SEARCH_COLUMNS
+    )
+
+
 def _build_query(args):
     where, params = [], []
     fts = False
@@ -617,13 +664,13 @@ def _build_query(args):
         params.append(args.match)
     if getattr(args, "company", None):
         where.append("j.company LIKE ?")
-        params.append(f"%{args.company}%")
+        params.append(_like_pattern(args.company))
     if getattr(args, "location", None):
         where.append("j.location LIKE ?")
-        params.append(f"%{args.location}%")
+        params.append(_like_pattern(args.location))
     if getattr(args, "job_type", None):
         where.append("j.job_type LIKE ?")
-        params.append(f"%{args.job_type}%")
+        params.append(_like_pattern(args.job_type))
     if getattr(args, "remote", False):
         where.append("j.is_remote IN ('True','true','1')")
     if getattr(args, "onsite", False):

@@ -136,13 +136,22 @@ make bench-setup
 
 `jobsview review` builds `data/jobs.db` first when the CSVs are newer, and
 always reads and writes decisions in `data/review.db`. Space cycles the review
-decision (`unreviewed → keep → false_positive`), `y`/`f` set one directly, one
-key per application status (`a` applied, `i` interview, `o` offer, `r` rejected,
-`w` withdrawn, `0` none), `j`/`k` and up/down move, left/right scroll the queue when
-the terminal is too narrow to show every column. `enter` toggles keyboard focus
-between the always-visible list and detail pane; `Ctrl+J/K` scrolls the details
-while keeping list focus. `v` opens a job in a browser, and `Ctrl-Z` undoes.
-After any action the cursor advances to the next unreviewed row.
+decision (`unreviewed → keep → false_positive`), `y`/`x` set keep or a false
+positive directly, one key per application status (`a` applied, `i` interview,
+`o` offer, `r` rejected, `w` withdrawn, `0` none), `j`/`k` and up/down move,
+left/right scroll the queue when the terminal is too narrow to show every
+column. `enter` toggles keyboard focus between the always-visible list and
+detail pane; `Ctrl+J/K` scrolls the details while keeping list focus. `v` opens
+a job in a browser, and `Ctrl-Z` undoes. After any action the cursor advances to
+the next row.
+
+The queue narrows without leaving the bench: `/` opens a search bar over title
+and company (the same match `jobsview search --match` makes, minus FTS and the
+description), `f` cycles the job family filter, `d` cycles the decision filter
+(`unreviewed` → `keep` → `false_positive` → all), and `Escape` clears them all.
+Filters combine, never re-query SQLite, and keep the queue's order; the header
+shows every active filter so a narrowed queue is never mistaken for the whole
+set.
 
 `jobsview review --list` prints the same queue as one line per job, joined with
 the store, for a headless check.

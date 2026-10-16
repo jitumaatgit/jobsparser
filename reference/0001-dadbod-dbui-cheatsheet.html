@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Reference · dadbod / dadbod-ui cheat sheet</title>
+  <link rel="stylesheet" href="../assets/style.css">
+  <style> h2 { margin-top: 1.6rem; } </style>
+</head>
+<body>
+  <p class="faint" style="font-family:var(--sans);font-size:.85rem;margin-bottom:1.5rem">Reference · prints on one or two pages</p>
+  <h1>dadbod / dadbod-ui — cheat sheet</h1>
+  <p class="subtitle">For browsing <code>data/jobs.db</code> in Neovim. Connection: <code>jobsparser</code> (<code>vim.g.dbs</code>).</p>
+
+  <h2>The path to browse a table</h2>
+  <div class="out">:DBUI  →  o jobsparser  →  o Tables (7)  →  o jobs  →  o List  →  :w  →  read .dbout</div>
+  <p class="faint">Every hop is the same key: <code>o</code> opens <em>or</em> toggles. Opening a node connects/fills but does <strong>not</strong> run — you run by saving (<code>:w</code>).</p>
+
+  <h2>Drawer keys</h2>
+  <table>
+    <tr><th>Key</th><th>Action</th></tr>
+    <tr><td><code>o</code> / <code>Enter</code></td><td>open or toggle (connect, expand, or open helper)</td></tr>
+    <tr><td><code>S</code></td><td>open node in a vertical split</td></tr>
+    <tr><td><code>d</code></td><td>delete (buffers / saved queries / added connections)</td></tr>
+    <tr><td><code>R</code></td><td>redraw drawer (after schema changed via a query)</td></tr>
+    <tr><td><code>A</code></td><td>add connection (saved to <code>~/.local/share/db_ui</code>)</td></tr>
+    <tr><td><code>H</code></td><td>toggle connection source (<code>g:dbs</code> vs file)</td></tr>
+    <tr><td><code>?</code></td><td>show all drawer mappings</td></tr>
+    <tr><td><code>q</code></td><td>close drawer</td></tr>
+  </table>
+
+  <h2>SQL-buffer keys</h2>
+  <table>
+    <tr><th>Key</th><th>Action</th></tr>
+    <tr><td><code>:w</code></td><td>save &amp; run (run happens on save by default)</td></tr>
+    <tr><td><code>&lt;Leader&gt;S</code></td><td>run without saving (whole buffer; visual = selection)</td></tr>
+    <tr><td><code>&lt;Leader&gt;W</code></td><td>save query permanently under <code>Saved queries</code></td></tr>
+    <tr><td><code>ic</code> <span class="faint">(in <code>.dbout</code>)</span></td><td>operate on cell value — e.g. <code>yic</code> yanks it</td></tr>
+  </table>
+
+  <h2>Connection URLs</h2>
+  <table>
+    <tr><th>Form</th><th>Example</th></tr>
+    <tr><td>SQLite absolute</td><td><code>sqlite:/home/mint/projects/jobsparser-fork/data/jobs.db</code></td></tr>
+    <tr><td>SQLite relative</td><td><code>sqlite:data/jobs.db</code></td></tr>
+    <tr><td>Server DBs</td><td><code>postgresql://user:pw@host:5432/db</code>, <code>mysql://root@localhost/db</code></td></tr>
+  </table>
+  <p class="faint">The <code>sqlite</code> adapter needs the <code>sqlite3</code> CLI on <code>PATH</code> (here <code>3.45.1</code>). <code>:help dadbod-sqlite</code>, <code>:help dadbod-urls</code>.</p>
+
+  <h2>Run SQL without the drawer</h2>
+  <pre class="out">:DB sqlite:data/jobs.db SELECT count(*) FROM jobs;
+:DB sqlite:data/jobs.db            " interactive console (q to leave)
+
+-- full-text match via the FTS index (prewrapped for the jobs table):
+SELECT title, company, location, date_posted, job_url
+FROM jobs
+WHERE rowid IN (SELECT rowid FROM jobs_fts WHERE jobs_fts MATCH '"entry level" NOT CDL')
+ORDER BY date_posted DESC;</pre>
+  <p class="faint">Paste any of this into a SQL buffer (it connects to the current <code>b:db</code>) or after <code>:DB &lt;url&gt;</code>. <code>:help :DB</code>.</p>
+
+  <h2>Defaults that surprise people</h2>
+  <ul class="tight">
+    <li>Opening a table helper does <strong>not</strong> run it — <code>g:db_ui_auto_execute_table_helpers = 0</code>.</li>
+    <li>Saving a SQL buffer <strong>does</strong> run it — <code>g:db_ui_execute_on_save = 1</code>.</li>
+    <li>SQLite table helpers: <code>List, Columns, Primary Keys, Indexes, Foreign Keys</code>.</li>
+    <li>Default <code>List</code> query: <code>SELECT * from "jobs" LIMIT 200;</code>.</li>
+  </ul>
+
+  <p class="footnote">
+    See the <a href="../lessons/0001-connect-and-browse-jobs-db.html">Lesson 1</a> walkthrough ·
+    <a href="../GLOSSARY.md">glossary</a> · <a href="../RESOURCES.md">resources</a> ·
+    canonical docs <code>:help vim-dadbod-ui</code>, <code>:help dadbod</code>.
+  </p>
+</body>
+</html>

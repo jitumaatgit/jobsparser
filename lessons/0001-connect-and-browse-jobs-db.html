@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lesson 1 · Browse jobs.db with :DBUI</title>
+  <link rel="stylesheet" href="../assets/style.css">
+  <script src="../assets/quiz.js" defer></script>
+</head>
+<body>
+  <p class="faint" style="font-family:var(--sans);font-size:.85rem;margin-bottom:1.5rem">Lesson 1 · Neovim + vim-dadbod</p>
+  <h1>Browse <code>jobs.db</code> from inside Neovim</h1>
+  <p class="subtitle">Connect the dadbod-ui drawer to your job database and read every row — no browser, no CLI.</p>
+
+  <div class="win">
+    <span class="win-label">Today's one win</span>
+    Run <code>:DBUI</code>, drill <code>jobsparser → Tables → jobs → List</code>, and see all 302 rows as a grid — without leaving the editor.
+  </div>
+
+  <h2>The three pieces</h2>
+  <p class="lede">dadbod is two plugins and one idea.</p>
+  <ul>
+    <li><strong><a href="https://github.com/tpope/vim-dadbod">vim-dadbod</a></strong> is the <em>engine</em>: given a <strong>connection</strong> it runs SQL and hands back results. <span class="faint">(<code>:help dadbod</code>)</span></li>
+    <li><strong><a href="https://github.com/kristijanhusak/vim-dadbod-ui">vim-dadbod-ui</a></strong> is the <em>drawer</em>: a navigable pane over that engine. <span class="faint">(<code>:help vim-dadbod-ui</code>)</span></li>
+    <li>A <strong>connection</strong> is a named URL to a database. Yours already exists: <code>jobsparser</code> → <code>sqlite:/home/mint/projects/jobsparser-fork/data/jobs.db</code>, defined in <code>~/.config/nvim/lua/plugins/jobsparser-db.lua</code> via <code>vim.g.dbs</code>. <span class="faint">(<code>:help vim-dadbod-ui-connections-g:dbs</code>)</span></li>
+  </ul>
+  <p>dadbod's <code>sqlite</code> adapter shells out to the <code>sqlite3</code> command-line program, so that binary must be on your <code>PATH</code>. Yours is <code>3.45.1</code>. <span class="faint">(<a href="https://sqlite.org/cli.html">SQLite CLI</a>, <code>:help dadbod-sqlite</code>)</span></p>
+
+  <div class="out">[ dadbod-ui ]  →  [ dadbod ]  →  [ sqlite3 ]  →  data/jobs.db</div>
+  <p class="faint">Left to right: the drawer (dadbod-ui) asks the engine (dadbod), which runs the <code>sqlite3</code> binary to read the file.</p>
+
+  <h2>What your drawer actually shows</h2>
+  <p>This is the real tree for your database (captured by driving <code>:DBUI</code> against <code>data/jobs.db</code>). A closed connection, then the same connection opened:</p>
+  <pre class="out">▸ jobsparser                          <span style="color:#8a8377"># closed — what :DBUI shows first</span>
+
+▾ jobsparser ✓                        <span style="color:#8a8377"># after you open it (✓ = connected)</span>
+  + New query
+  ▸ Saved queries (0)
+  ▸ Tables (7)</pre>
+  <p>Open <code>Tables (7)</code> and you get the seven tables; open the <code>jobs</code> table and it expands to its <strong>helpers</strong> — predefined queries:</p>
+  <pre class="out">▾ Tables (7)
+    ▾ jobs
+        ~ List
+        ~ Columns
+        ~ Primary Keys
+        ~ Indexes
+        ~ Foreign Keys
+    ▸ jobs_fts
+    ▸ jobs_fts_config
+    ▸ … (jobs_fts_content, jobs_fts_data, jobs_fts_docsize, jobs_fts_idx)</pre>
+
+  <h2>Do it — in Neovim, now</h2>
+  <p class="faint">This is the feedback loop: the proof is the grid you see at the end.</p>
+  <ol class="steps">
+    <li>Run <code>:DBUI</code>. A drawer opens on the left with one line: <code>▸ jobsparser</code>. <span class="faint">(Plugins are lazy-loaded — the first <code>:DBUI</code> loads them.)</span></li>
+    <li>Put the cursor on <code>jobsparser</code> and press <kbd>o</kbd> (or <kbd>Enter</kbd>). It connects (<code>✓</code>) and reveals <code>New query</code>, <code>Saved queries (0)</code>, <code>Tables (7)</code>.</li>
+    <li>Move to <code>Tables (7)</code>, press <kbd>o</kbd>. The table names appear.</li>
+    <li>Move to <code>jobs</code>, press <kbd>o</kbd>. The helpers (<code>List</code>, <code>Columns</code>, …) appear.</li>
+    <li>Move to <code>List</code>, press <kbd>o</kbd>. A SQL buffer opens, pre-filled with <code>SELECT * from "jobs" LIMIT 200;</code>.</li>
+    <li><strong>Type <code>:w</code></strong> and press Enter. The query runs and a <code>.dbout</code> buffer renders the grid — all 302 rows.</li>
+    <li>Press <kbd>q</kbd> in the drawer to close it (or <code>:DBUIToggle</code>).</li>
+  </ol>
+
+  <p>Here's an actual <code>.dbout</code> header + first row, straight from your DB:</p>
+  <pre class="out">rowid  id                   site    job_url …                       title                                    company
+-----  -------------------  ------  ---- …                          --------------------------------------- ...  -----
+1      in-d86c54c2ca06e265  indeed  https://www.indeed.com/viewjob…   Cannabis Retail Lemonnade Tigard / …       Portland Lemonnade</pre>
+
+  <h3>Keys worth memorising now</h3>
+  <table>
+    <tr><th>Key</th><th>Where</th><th>Does</th></tr>
+    <tr><td><code>o</code> / <code>Enter</code></td><td>drawer</td><td>open <em>or</em> toggle a node</td></tr>
+    <tr><td><code>S</code></td><td>drawer</td><td>open the node in a vertical split</td></tr>
+    <tr><td><code>:w</code></td><td>SQL buffer</td><td>save &amp; run the query</td></tr>
+    <tr><td><code>&lt;Leader&gt;S</code></td><td>SQL buffer</td><td>run without saving (whole buffer, or a visual selection)</td></tr>
+    <tr><td><code>q</code></td><td>drawer</td><td>close the drawer</td></tr>
+    <tr><td><code>?</code></td><td>drawer</td><td>show every drawer mapping</td></tr>
+  </table>
+  <p class="faint">Source: <code>:help vim-dadbod-ui-mappings</code>, <code>:help &lt;Plug&gt;(DBUI_ExecuteQuery)</code>.</p>
+
+  <div class="warn">
+    <span class="callout-title">The gotcha everyone hits</span>
+    Opening a table helper by default does <strong>not</strong> run the query — it only
+    pre-fills the SQL buffer. Auto-executing helpers is off (<code>g:db_ui_auto_execute_table_helpers = 0</code>).
+    You run it by <strong>saving</strong> the buffer (<code>:w</code>), because <code>g:db_ui_execute_on_save = 1</code>.
+    <span class="faint">(<code>:help g:db_ui_auto_execute_table_helpers</code>, <code>:help g:db_ui_execute_on_save</code>)</span>
+  </div>
+
+  <h2>Recall it (self-check)</h2>
+  <p class="faint">Answer from memory before looking back — the struggle is what makes it stick.</p>
+
+  <div class="quiz" data-correct="a" data-yes="Correct — o opens/toggles." data-no="Not quite. o (or Enter) is the open/toggle key.">
+    <div class="q">In the drawer, on a closed node, which key opens it?</div>
+    <button class="quiz-opt" data-key="a"><span class="quiz-key">a</span>Press o to open it</button>
+    <button class="quiz-opt" data-key="b"><span class="quiz-key">b</span>Press p to open it</button>
+    <button class="quiz-opt" data-key="c"><span class="quiz-key">c</span>Press o to quit it</button>
+    <button class="quiz-opt" data-key="d"><span class="quiz-key">d</span>Press q to open it</button>
+    <div class="quiz-feedback" aria-live="polite"></div>
+  </div>
+
+  <div class="quiz" data-correct="a" data-yes="Correct — :w runs the query." data-no="Not quite. :w (save) is what runs it by default.">
+    <div class="q">A SQL buffer opens from the jobs List helper. How do you run it?</div>
+    <button class="quiz-opt" data-key="a"><span class="quiz-key">a</span>Type :w to run it</button>
+    <button class="quiz-opt" data-key="b"><span class="quiz-key">b</span>Type :q to run it</button>
+    <button class="quiz-opt" data-key="c"><span class="quiz-key">c</span>Type :e to run it</button>
+    <button class="quiz-opt" data-key="d"><span class="quiz-key">d</span>Type :o to run it</button>
+    <div class="quiz-feedback" aria-live="polite"></div>
+  </div>
+
+  <h2>If something's off</h2>
+  <ul class="tight">
+    <li><code>✕</code> instead of <code>✓</code> on the connection → the file path is wrong or <code>sqlite3</code> isn't on <code>PATH</code>. Check with <code>which sqlite3</code>.</li>
+    <li>Numbers differ — e.g. <code>Tables (8)</code> — a table was added since this lesson; that's fine.</li>
+    <li>Drawer is empty or <code>:DBUI</code> says nothing loaded → the plugins are lazy; make sure you ran <code>:DBUI</code> in the current session.</li>
+  </ul>
+
+  <div class="teacher">
+    <span class="callout-title">Ask your teacher</span>
+    Confused by any step, or hit an error not covered here? Send me the exact
+    message and I'll walk you through it. I can also set up the next lesson.
+  </div>
+
+  <h2>Go deeper (primary source)</h2>
+  <p>Watch <a href="https://www.youtube.com/watch?v=ALGBuFLzDSA">TJ DeVries' "Dadbod UI" presentation</a> (linked from the plugin README), then skim <code>:help vim-dadbod-ui</code> once top to bottom. Both come straight from the plugin authors.</p>
+
+  <p class="footnote">
+    References: <a href="../reference/0001-dadbod-dbui-cheatsheet.html">the cheat sheet</a> (print me),
+    the <a href="../GLOSSARY.md">glossary</a> (the words we use),
+    <a href="../RESOURCES.md">resources</a>,
+    and this repo's <a href="../README.md">"Browse in Neovim" section</a>.
+    <br>Next lesson (coming soon): writing your first hand-authored SQL in a buffer, translating a <code>jobsview.py new</code> flag into SQL.
+  </p>
+</body>
+</html>
