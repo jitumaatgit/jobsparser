@@ -1,4 +1,4 @@
-Status: ready-for-agent
+Status: resolved
 Type: task
 
 # 07 — Survivors CSV export
@@ -45,3 +45,22 @@ shape the resume synthesis step already reads. This replaces
 ## Blocked by
 
 [05](05-bench-tui.md)
+
+## Comments
+
+**2026-10-16.** Implemented and verified. `jobsview.py` gains `export_survivors`
+and `cmd_export` (12 columns in the specified order, join via `_review_rows`,
+`decision='keep'`, `date_posted DESC`, atomic replace, header-only file when
+empty, count printed). `jobsview_tui.py` binds `e` to
+`action_export_survivors`, which shells out to the same CLI command so the two
+share one code path.
+
+**Key deviation recorded:** ticket 06 moved the direct false-positive key from
+`f` to `x`, so `x` was no longer free for the export. The export key is `e`
+(Export) instead; `space` still cycles all three decisions, so no functionality
+is lost. Acceptance line 42's reference to `x` in the TUI is superseded by `e`.
+
+Verified: 6 tests in ExportTest (columns, keep-only, re-run drops rejects, empty
+result, date ordering, headless subprocess, TUI-vs-CLI byte identity); full
+suite 33 green; real `data/survivors.csv` written with the 12-column header and
+6 kept rows.

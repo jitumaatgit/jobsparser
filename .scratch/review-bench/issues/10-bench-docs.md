@@ -1,4 +1,4 @@
-Status: ready-for-agent
+Status: resolved
 Type: task
 
 # 10 — Document the review bench
@@ -34,3 +34,11 @@ existing, and `CONTRIBUTING.md` says nothing about it.
 ## Blocked by
 
 [05](05-bench-tui.md), [07](07-survivors-export.md), [08](08-kanban-export.md)
+
+
+## Comments
+
+**2026-10-16.** Implemented. README restructured into a single Review bench
+section (two axes, setup, keys, narrowing, survivors export, kanban export with
+one-way caveat, SQL escape hatch). CONTRIBUTING.md added with setup split.
+No Google Sheets mention remains in live docs.

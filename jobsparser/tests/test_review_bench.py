@@ -846,7 +846,308 @@ class ReviewBenchTest(unittest.IsolatedAsyncioTestCase):
                 "a title is text, never markup",
             )
 
+class ExportTest(unittest.TestCase):
+    """Survivors CSV export (ticket 07): one code path for the CLI and the bench."""
 
+    EXPORT_COLUMNS = jobsview.EXPORT_COLUMNS
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.data = Path(self.tmp.name)
+        self.db = self.data / "jobs.db"
+        self.queries = self.data / "queries.txt"
+        self.queries.write_text('# --- Retail ---\n"cashier"\n', encoding="utf-8")
+
+    def build_index(self, rows):
+        with (self.data / "jobs_0.csv").open("w", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(fh, fieldnames=CSV_COLUMNS)
+            writer.writeheader()
+            writer.writerows(rows)
+        args = argparse.Namespace(
+            data_dir=str(self.data), db=str(self.db), queries=str(self.queries),
+        )
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(0, jobsview.cmd_ingest(args))
+        return args
+
+    def run_export(self, args, output):
+        args2 = argparse.Namespace(**vars(args), output=str(output))
+        with contextlib.redirect_stdout(io.StringIO()):
+            return jobsview.cmd_export(args2)
+
+    def test_export_writes_exact_header_and_only_kept_rows(self):
+        rows = [
+            _row("one", "Cashier One"),
+            _row("two", "Cashier Two"),
+            _row("three", "Cashier Three"),
+        ]
+        args = self.build_index(rows)
+        # keep one, false_positive one, leave one unreviewed
+        con = jobsview._review_db(args)
+        try:
+            jobsview.set_decision(con, "https://indeed.com/job/one", "keep")
+            jobsview.set_decision(con, "https://indeed.com/job/two", "false_positive")
+            jobsview.set_application_status(con, "https://indeed.com/job/one", "applied")
+        finally:
+            con.close()
+
+        output = self.data / "survivors.csv"
+        self.assertEqual(0, self.run_export(args, output))
+        with output.open(newline="", encoding="utf-8") as fh:
+            reader = csv.reader(fh)
+            header = next(reader)
+            data_rows = list(reader)
+        self.assertEqual(list(self.EXPORT_COLUMNS), header)
+        self.assertEqual(1, len(data_rows))
+        kept = data_rows[0]
+        self.assertEqual("https://employer.example/jobs/one", kept[0])
+        self.assertEqual("Cashier One", kept[1])
+        self.assertEqual("keep", kept[10])
+        self.assertEqual("applied", kept[11])
+        self.assertEqual("stamped", kept[9])
+
+    def test_rerun_drops_a_rejected_row(self):
+        rows = [_row("one", "Cashier One"), _row("two", "Cashier Two")]
+        args = self.build_index(rows)
+        con = jobsview._review_db(args)
+        try:
+            jobsview.set_decision(con, "https://indeed.com/job/one", "keep")
+            jobsview.set_decision(con, "https://indeed.com/job/two", "keep")
+        finally:
+            con.close()
+
+        output = self.data / "survivors.csv"
+        self.run_export(args, output)
+        # reject one between runs
+        con = jobsview._review_db(args)
+        try:
+            jobsview.set_decision(con, "https://indeed.com/job/two", "false_positive")
+        finally:
+            con.close()
+        self.run_export(args, output)
+        with output.open(newline="", encoding="utf-8") as fh:
+            lines = list(csv.reader(fh))
+        self.assertEqual(2, len(lines))  # header + one row
+        self.assertEqual("Cashier One", lines[1][1])
+
+    def test_all_rejected_writes_header_only(self):
+        args = self.build_index([_row("one", "Cashier One")])
+        output = self.data / "survivors.csv"
+        self.run_export(args, output)
+        self.assertTrue(output.is_file())
+        with output.open(newline="", encoding="utf-8") as fh:
+            content = fh.read()
+        self.assertEqual(",".join(self.EXPORT_COLUMNS) + "\n", content)
+
+    def test_export_orders_by_date_posted_desc(self):
+        rows = [
+            _row("a", "Older", date_posted="2026-01-01"),
+            _row("b", "Newer", date_posted="2026-02-02"),
+        ]
+        args = self.build_index(rows)
+        con = jobsview._review_db(args)
+        try:
+            for url in ("https://indeed.com/job/a", "https://indeed.com/job/b"):
+                jobsview.set_decision(con, url, "keep")
+        finally:
+            con.close()
+        output = self.data / "survivors.csv"
+        self.run_export(args, output)
+        with output.open(newline="", encoding="utf-8") as fh:
+            titles = [r[1] for r in csv.reader(fh) if r and r[1] != "title"]
+        self.assertEqual(["Newer", "Older"], titles)
+
+
+    def test_export_runs_headless_via_subprocess(self):
+        args = self.build_index([_row("one", "Cashier One")])
+        con = jobsview._review_db(args)
+        try:
+            jobsview.set_decision(con, "https://indeed.com/job/one", "keep")
+        finally:
+            con.close()
+        output = self.data / "survivors.csv"
+        proc = subprocess.run(
+            [sys.executable, "-S", str(JOBSVIEW),
+             "--data-dir", str(self.data), "--db", str(self.db),
+             "--queries", str(self.queries),
+             "export", "--output", str(output)],
+            cwd=str(self.data), capture_output=True, text=True,
+        )
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertIn("1 kept job(s)", proc.stdout)
+        self.assertTrue(output.is_file())
+
+    @BENCH
+    async def test_tui_export_byte_identical_to_cli(self):
+        # The bench shells out to the same export, so the files must match.
+        self.build_index([_row("one", "Cashier One"), _row("two", "Cashier Two")])
+        args = argparse.Namespace(
+            data_dir=str(self.data), db=str(self.db), queries=str(self.queries),
+        )
+        con = jobsview._review_db(args)
+        try:
+            jobsview.set_decision(con, "https://indeed.com/job/one", "keep")
+        finally:
+            con.close()
+        cli_output = self.data / "cli.csv"
+        with contextlib.redirect_stdout(io.StringIO()):
+            jobsview.cmd_export(argparse.Namespace(**vars(args), output=str(cli_output)))
+        app = ReviewBenchApp(args)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("e")
+            await pilot.pause()
+        tui_output = self.data / "survivors.csv"
+        self.assertTrue(tui_output.is_file())
+        self.assertEqual(cli_output.read_bytes(), tui_output.read_bytes())
+
+
+class KanbanTest(unittest.TestCase):
+    """Kanban.md export (ticket 08): temp paths only, never the default board."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.data = Path(self.tmp.name)
+        self.db = self.data / "jobs.db"
+        self.queries = self.data / "queries.txt"
+        self.queries.write_text('# --- Retail ---\n"cashier"\n', encoding="utf-8")
+        self.board = self.data / "kanban.md"
+
+    def build_index(self, rows):
+        with (self.data / "jobs_0.csv").open("w", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(fh, fieldnames=CSV_COLUMNS)
+            writer.writeheader()
+            writer.writerows(rows)
+        args = argparse.Namespace(
+            data_dir=str(self.data), db=str(self.db), queries=str(self.queries),
+        )
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(0, jobsview.cmd_ingest(args))
+        return args
+
+    def run_kanban(self, args):
+        a = argparse.Namespace(**vars(args), kanban=str(self.board))
+        with contextlib.redirect_stdout(io.StringIO()):
+            return jobsview.cmd_kanban(a)
+
+    def test_custom_settings_block_is_preserved(self):
+        rows = [_row("a", "Kept")]
+        args = self.build_index(rows)
+        con = jobsview._review_db(args)
+        try:
+            jobsview.set_decision(con, "https://indeed.com/job/a", "keep")
+        finally:
+            con.close()
+        # pre-existing board with a custom settings line
+        custom = (
+            "---\n\nkanban-plugin: basic\n\n---\n\n"
+            "## Interested\n\n- [ ] old\n\n"
+            "%% kanban:settings\n```\n"
+            '{"kanban-plugin":"basic","lane-width":320}\n'
+            "```\n%%\n"
+        )
+        self.board.write_text(custom, encoding="utf-8")
+        self.run_kanban(args)
+        out = self.board.read_text(encoding="utf-8")
+        self.assertIn('"lane-width":320', out)
+        self.assertIn("Kept", out)
+
+    def test_one_row_per_status_produces_six_sections(self):
+        rows = [_row(str(i), f"Job {i}") for i in range(6)]
+        args = self.build_index(rows)
+        statuses = ("none", "applied", "interview", "offer", "rejected", "withdrawn")
+        con = jobsview._review_db(args)
+        try:
+            for i, status in enumerate(statuses):
+                jobsview.set_decision(con, f"https://indeed.com/job/{i}", "keep")
+                jobsview.set_application_status(con, f"https://indeed.com/job/{i}", status)
+        finally:
+            con.close()
+        self.assertEqual(0, self.run_kanban(args))
+        text = self.board.read_text(encoding="utf-8")
+        for name in ("Interested", "Applied", "Interview", "Offer", "Rejection", "Withdrawn"):
+            self.assertIn(f"## {name}", text)
+        positions = [text.index(f"## {name}") for name in
+                     ("Interested", "Applied", "Interview", "Offer", "Rejection", "Withdrawn")]
+        self.assertEqual(positions, sorted(positions))
+        self.assertIn("- [ ] Job 0 — Example Employer", text)
+        self.assertIn("- [ ] Job 5 — Example Employer", text)
+        self.assertIn("kanban-plugin: basic", text)
+        self.assertIn("%% kanban:settings", text)
+
+    def test_false_positive_and_unreviewed_rows_produce_empty_board(self):
+        rows = [_row("a", "Kept"), _row("b", "Rejected"), _row("c", "Pending")]
+        args = self.build_index(rows)
+        con = jobsview._review_db(args)
+        try:
+            jobsview.set_decision(con, "https://indeed.com/job/a", "keep")
+            jobsview.set_decision(con, "https://indeed.com/job/b", "false_positive")
+        finally:
+            con.close()
+        self.run_kanban(args)
+        text = self.board.read_text(encoding="utf-8")
+        self.assertIn("Kept", text)
+        self.assertNotIn("Rejected", text)
+        self.assertNotIn("Pending", text)
+
+    def test_withdrawn_maps_only_to_withdrawn_section(self):
+        rows = [_row("a", "Gone")]
+        args = self.build_index(rows)
+        con = jobsview._review_db(args)
+        try:
+            jobsview.set_decision(con, "https://indeed.com/job/a", "keep")
+            jobsview.set_application_status(con, "https://indeed.com/job/a", "withdrawn")
+        finally:
+            con.close()
+        self.run_kanban(args)
+        text = self.board.read_text(encoding="utf-8")
+        idx = text.index("- [ ] Gone — Example Employer")
+        header = text.rfind("## ", 0, idx)
+        self.assertEqual("## Withdrawn", text[header:header + len("## Withdrawn")])
+
+    def test_rerun_moves_card_between_sections(self):
+        rows = [_row("a", "Mover")]
+        args = self.build_index(rows)
+        con = jobsview._review_db(args)
+        try:
+            jobsview.set_decision(con, "https://indeed.com/job/a", "keep")
+            jobsview.set_application_status(con, "https://indeed.com/job/a", "none")
+        finally:
+            con.close()
+        self.run_kanban(args)
+        text1 = self.board.read_text(encoding="utf-8")
+        self.assertIn("## Interested", text1)
+        con = jobsview._review_db(args)
+        try:
+            jobsview.set_application_status(con, "https://indeed.com/job/a", "applied")
+        finally:
+            con.close()
+        self.run_kanban(args)
+        text2 = self.board.read_text(encoding="utf-8")
+        self.assertEqual(1, text2.count("- [ ] Mover — Example Employer"))
+        idx = text2.index("- [ ] Mover — Example Employer")
+        header = text2.rfind("## ", 0, idx)
+        self.assertEqual("## Applied", text2[header:header + len("## Applied")])
+
+    def test_kanban_runs_headless_via_subprocess(self):
+        rows = [_row("a", "Headless")]
+        args = self.build_index(rows)
+        con = jobsview._review_db(args)
+        try:
+            jobsview.set_decision(con, "https://indeed.com/job/a", "keep")
+        finally:
+            con.close()
+        proc = subprocess.run(
+            [sys.executable, "-S", str(JOBSVIEW),
+             "--data-dir", str(self.data), "--db", str(self.db),
+             "--queries", str(self.queries),
+             "kanban", "--kanban", str(self.board)],
+            cwd=str(self.data), capture_output=True, text=True,
+        )
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertTrue(self.board.is_file())
 class StdlibOnlyTest(unittest.TestCase):
     """The part of the bench contract that must hold with Textual ABSENT.
 

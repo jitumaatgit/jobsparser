@@ -124,37 +124,88 @@ ORDER BY date_posted DESC;
 
 ## Review bench
 
-`jobsview review` is the terminal UI where results are reviewed: a queue of
-unreviewed rows on the left, the description and provenance on the right. It
-needs [Textual](https://textual.textualize.io/), installed separately so the
-query commands above stay install-free:
+The review pass happens here, not in a spreadsheet. `jobsview review` is a
+terminal UI: a queue of unreviewed rows on the left, the description and
+provenance on the right.
+
+**The two axes.** Every row carries two independent verdicts:
+
+- *Review decision* — `unreviewed` / `keep` / `false_positive` (is this job
+  worth applying to at all?).
+- *Application status* — `none` / `applied` / `interview` / `offer` /
+  `rejected` / `withdrawn` (where an application to a kept job stands).
+
+`space` cycles the decision, `y`/`x` set keep/false-positive directly, and one
+key per application status (`a` applied, `i` interview, `o` offer, `r` rejected,
+`w` withdrawn, `0`/`n` none). They are orthogonal: a false positive is a row
+never worth applying to; `rejected` is an employer declining an application.
+
+### Setup
 
 ```bash
-make bench-setup
+make bench-setup          # installs Textual
 .venv/bin/python jobsview.py review
 ```
 
 `jobsview review` builds `data/jobs.db` first when the CSVs are newer, and
-always reads and writes decisions in `data/review.db`. Space cycles the review
-decision (`unreviewed → keep → false_positive`), `y`/`x` set keep or a false
-positive directly, one key per application status (`a` applied, `i` interview,
-`o` offer, `r` rejected, `w` withdrawn, `0` none), `j`/`k` and up/down move,
-left/right scroll the queue when the terminal is too narrow to show every
-column. `enter` toggles keyboard focus between the always-visible list and
-detail pane; `Ctrl+J/K` scrolls the details while keeping list focus. `v` opens
-a job in a browser, and `Ctrl-Z` undoes. After any action the cursor advances to
-the next row.
+always reads and writes decisions in `data/review.db` (the only source of
+truth for user state — never delete it).
 
-The queue narrows without leaving the bench: `/` opens a search bar over title
-and company (the same match `jobsview search --match` makes, minus FTS and the
-description), `f` cycles the job family filter, `d` cycles the decision filter
-(`unreviewed` → `keep` → `false_positive` → all), and `Escape` clears them all.
-Filters combine, never re-query SQLite, and keep the queue's order; the header
-shows every active filter so a narrowed queue is never mistaken for the whole
-set.
+### Keys
+
+- `j`/`k` (or up/down) move; `enter` toggles focus between the list and the
+  detail pane; `Ctrl+J`/`Ctrl+K` scroll the details.
+- left/right scroll the queue when the terminal is too narrow for every column.
+- `v` opens the job in a browser.
+- `e` runs `jobsview export`, writing `data/survivors.csv` (every kept row,
+  newest first) — the TUI and the CLI share one code path.
+- `Ctrl-Z` undoes the last action; `q` quits (Escape no longer quits).
+- After any action the cursor advances to the next row.
+
+### Narrowing the queue
+
+`/` opens a search bar over title and company (the same match `jobsview search
+--match` makes, minus FTS and the description), `f` cycles the job-family
+filter, `d` cycles the decision filter (`unreviewed` → `keep` →
+`false_positive` → all), and `Escape` clears them all. Filters combine as a
+conjunction, never re-query SQLite, and keep the queue's order; the header shows
+every active filter.
 
 `jobsview review --list` prints the same queue as one line per job, joined with
 the store, for a headless check.
+
+### Survivors export
+
+`jobsview export` writes `data/survivors.csv` — a full snapshot of every kept row
+in the shape the resume-synthesis step reads (12 columns: `job_url_direct`,
+`title`, `company`, `date_posted`, `min_amount`, `max_amount`, `description`,
+`search_term`, `term_label`, `job_family_source`, `decision`,
+`application_status`). The first seven match `filter_job.py`'s output and order.
+Overwrites on every run; an empty result writes a header-only file.
+
+### Kanban export
+
+`jobsview kanban` overwrites the kanban.nvim board at
+`~/notes/docs/90-archives/04-finding-employment-project/application-process/kanban.md`
+(one-way, by deliberate choice) with one card per kept row, grouped by
+application status. False positives and unreviewed rows are absent.
+
+**Migration gate:** the board's hand-added `gardencenter` card (and any other
+card not in the bench) is destroyed by this export. Re-enter such cards in the
+bench first, or accept the loss. No code papers over it.
+
+### SQL escape hatch
+
+Both stay available as an optional SQL escape hatch:
+
+```bash
+make viewer-setup
+make view
+```
+
+and, for an in-editor SQLite browser, [vim-dadbod](https://github.com/tpope/vim-dadbod)
+and [vim-dadbod-ui](https://github.com/kristijanhusak/vim-dadbod-ui) (`make index`,
+then `DBUI_URL="sqlite:$PWD/data/jobs.db" nvim`).
 
 ## Notes
 
@@ -163,6 +214,20 @@ the store, for a headless check.
   positives are filtered by hand afterwards and a missed job cannot be recovered.
 - JobSpy is consumed from git, so breaking upstream changes can reach you. Pin if that
   becomes a problem.
+
+
+## Kanban export
+
+`jobsview kanban` overwrites the kanban.nvim board at
+`~/notes/docs/90-archives/04-finding-employment-project/application-process/kanban.md`
+(one-way, by deliberate choice) with one card per kept row, grouped by
+application status (`none` → `## Interested`, `applied` → `## Applied`,
+`interview` → `## Interview`, `offer` → `## Offer`, `rejected` → `## Rejection`,
+`withdrawn` → `## Withdrawn`). False positives and unreviewed rows are absent.
+
+**Migration gate:** the board's hand-added `gardencenter` card (and any other card
+not in the bench) is destroyed by this export. Re-enter such cards in the bench
+before running it — or accept the loss. No code papers over it.
 
 ## License
 

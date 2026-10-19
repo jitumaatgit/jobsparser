@@ -1,4 +1,4 @@
-Status: ready-for-agent
+Status: resolved
 Type: task
 
 # 08 — `kanban.md` export, with a migration gate
@@ -50,3 +50,18 @@ against the real path.
 ## Blocked by
 
 [05](05-bench-tui.md), and the migration gate above.
+
+
+## Comments
+
+**2026-10-16.** Implemented and verified. `jobsview.py` gains `export_kanban` and
+`cmd_kanban` (six sections in order, application-status→section map, kept rows
+only, atomic replace, frontmatter and `%% kanban:settings %%` blocks preserved).
+`--kanban` defaults to the board path; tests use temp paths only.
+
+The migration gate could not be satisfied by bench re-entry: `gardencenter`
+was never a scrape, so no indexed row matches it. The export is one-way by
+design and will drop that card; the user accepted this.
+
+Verified: 5 tests in KanbanTest (six sections, empty board, withdrawn mapping,
+rerun moves card, headless subprocess); full suite 83 green.

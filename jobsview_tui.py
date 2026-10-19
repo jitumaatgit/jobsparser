@@ -16,7 +16,10 @@ from textual.containers import Horizontal
 from textual.widgets import DataTable, Footer, Input, RichLog, Static
 
 import jobsview
+from pathlib import Path as _Path
 
+REPO_ROOT = _Path(__file__).resolve().parents[0]
+JOBSVIEW_PATH = REPO_ROOT / "jobsview.py"
 
 # The decision filter's states. The bench opens on the unreviewed queue --
 # the spec's flat-queue default -- and `d` walks these in order.
@@ -149,7 +152,7 @@ class ReviewBenchApp(App[None]):
         Binding("r", "rejected", "Rejected", show=False, priority=True),
         Binding("w", "withdrawn", "Withdrawn", show=False, priority=True),
         Binding("0", "none", "None", show=False, priority=True),
-        Binding("n", "none", "None", show=False, priority=True),
+        Binding("e", "export_survivors", "Export", show=True, priority=True),
         Binding("ctrl+z", "undo", "Undo", show=True, priority=True),
         Binding("q", "quit", "Quit", show=True, priority=True),
     ]
@@ -670,6 +673,20 @@ class ReviewBenchApp(App[None]):
 
     def action_none(self) -> None:
         self._persist_action(status="none")
+
+    def action_export_survivors(self) -> None:
+        import subprocess
+        import sys
+        from pathlib import Path
+        output = Path(self.args.data_dir) / "survivors.csv"
+        result = subprocess.run(
+            [sys.executable, str(JOBSVIEW_PATH), "--data-dir", str(self.args.data_dir),
+             "--db", str(self.args.db), "--queries", str(self.args.queries),
+             "export", "--output", str(output)],
+            capture_output=True, text=True,
+        )
+        message = (result.stdout or result.stderr).strip() or "export failed"
+        self.query_one("#undo-status", Static).update(message)
 
     def action_undo(self) -> None:
         while self._undo_stack:

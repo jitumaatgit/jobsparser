@@ -514,7 +514,10 @@ def _review_rows(con, db_path):
     con.execute("ATTACH DATABASE ? AS jobs", (str(Path(db_path)),))
     con.row_factory = sqlite3.Row
     columns = {row[1] for row in con.execute("PRAGMA jobs.table_info(jobs)")}
-    details = ("job_url_direct", "search_term", "term_label", "description")
+    details = (
+        "job_url_direct", "search_term", "term_label", "description",
+        "min_amount", "max_amount",
+    )
     optional = ", ".join(
         f"j.{column}" if column in columns else f"NULL AS {column}"
         for column in details
@@ -572,6 +575,177 @@ def cmd_review_list(args) -> int:
             r["job_url"],
         ]
         print(" ".join(cells))
+    return 0
+
+# -- survivors export (data/survivors.csv) -----------------------------------
+#
+# The snapshot the resume-synthesis step reads. The first seven columns are
+# filter_job.py's output, in its order, so prompts and scripts that already
+# read ~/notes/.../interesting-jobs.csv keep working unchanged.
+# `job_family_source` qualifies the provenance columns it follows (stamped /
+# inferred / unknown), so a guessed family is never mistaken for a recorded
+# one; `job_family` itself is not exported -- it is recoverable from
+# search_term/term_label, and the synthesis step does not read it.
+
+EXPORT_COLUMNS = (
+    "job_url_direct", "title", "company", "date_posted",
+    "min_amount", "max_amount", "description",
+    "search_term", "term_label", "job_family_source",
+    "decision", "application_status",
+)
+
+
+def _export_path(args) -> Path:
+    """Where the snapshot is written, defaulting beside the sidecar store."""
+    return Path(getattr(args, "output", None) or Path(args.data_dir) / "survivors.csv")
+
+
+def export_survivors(args, output: Path) -> int:
+    """Write every kept row to ``output``; return the count written.
+
+    Only ``keep`` rows: a false positive is a row never worth applying to and
+    an unreviewed row has not been judged yet, so neither belongs in a snapshot
+    a resume step would read. The join is the queue's -- jobs.db drives, so a
+    row that dropped out of newer CSVs is gone from the snapshot too while its
+    decision stays in the sidecar.
+
+    Newest first; ties keep the index's order (a stable reverse sort on a
+    YYYY-MM-DD string is chronological). The file is rewritten in full every
+    run via an atomic replace, so an interrupted export cannot leave a torn
+    snapshot -- the file either reflects the last good run or the one before.
+    An empty result still writes the header: the file must never lie about what
+    it contains.
+    """
+    con = _review_db(args)
+    try:
+        rows = [
+            dict(r) for r in _review_rows(con, Path(args.db))
+            if (r["decision"] or "unreviewed") == "keep"
+        ]
+    finally:
+        con.close()
+    rows = sorted(rows, key=lambda r: r["date_posted"] or "", reverse=True)
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    tmp = output.with_name(output.name + ".tmp")
+    with tmp.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh, lineterminator="\n")
+        writer.writerow(EXPORT_COLUMNS)
+        for r in rows:
+            writer.writerow([r.get(c) if r.get(c) is not None else "" for c in EXPORT_COLUMNS])
+    tmp.replace(output)
+    return len(rows)
+
+
+def cmd_export(args) -> int:
+    """Write the survivors snapshot the resume-synthesis step reads."""
+    db = Path(args.db)
+    if not db.exists():
+        print(_missing_index(db), file=sys.stderr)
+        return 1
+    output = _export_path(args)
+    try:
+        count = export_survivors(args, output)
+    except (OSError, sqlite3.Error) as err:
+        print(f"cannot write {output}: {err}", file=sys.stderr)
+        return 1
+    print(f"{count} kept job(s) -> {output}")
+    return 0
+
+
+# -- kanban.md export --------------------------------------------------------
+KANBAN_SECTIONS = (
+    ("none", "Interested"),
+    ("applied", "Applied"),
+    ("interview", "Interview"),
+    ("offer", "Offer"),
+    ("rejected", "Rejection"),
+    ("withdrawn", "Withdrawn"),
+)
+_STATUS_TO_SECTION = {status: name for status, name in KANBAN_SECTIONS}
+def _kanban_path(args) -> Path:
+    return Path(getattr(args, "kanban", None) or (Path.home() / "notes" / "docs" / "90-archives" / "04-finding-employment-project" / "application-process" / "kanban.md"))
+
+
+def export_kanban(args, output: Path) -> int:
+    """Write the board; return the number of cards written."""
+    con = _review_db(args)
+    try:
+        rows = [dict(r) for r in _review_rows(con, Path(args.db))]
+    finally:
+        con.close()
+    kept = [r for r in rows if (r["decision"] or "unreviewed") == "keep"]
+
+    buckets: dict[str, list[dict]] = {name: [] for _, name in KANBAN_SECTIONS}
+    for r in kept:
+        status = r.get("application_status") or "none"
+        section = _STATUS_TO_SECTION.get(status, "Interested")
+        buckets[section].append(r)
+
+    # Preserve the board's own frontmatter and settings blocks verbatim when
+    # the file already exists. The Obsidian kanban plugin rewrites the
+    # settings block with the user's board config (lane width, date format, …);
+    # rebuilding it from a template would silently reset that. Fall back to the
+    # canonical blocks only for a board that does not exist yet.
+    front_block = "---\n\nkanban-plugin: basic\n\n---\n"
+    settings_block = (
+        "%% kanban:settings\n```\n{\"kanban-plugin\":\"basic\"}\n```\n%%"
+    )
+    if output.exists():
+        try:
+            existing = output.read_text(encoding="utf-8")
+            head = existing.split("## ", 1)[0]
+            # frontmatter is the leading `--- … ---` block
+            fm_end = head.find("---", head.find("---") + 3)
+            if fm_end != -1:
+                fm = head[:fm_end + 3].strip()
+                if fm.startswith("---"):
+                    front_block = fm
+            # settings block is the trailing `%% kanban:settings … %%`
+            marker = "%% kanban:settings"
+            idx = existing.rfind(marker)
+            if idx != -1:
+                tail = existing[idx:]
+                end = tail.find("%%", len(marker))
+                if end != -1:
+                    settings_block = tail[:end + 2].rstrip()
+        except OSError:
+            pass
+
+    lines = [front_block, ""]
+    for _, name in KANBAN_SECTIONS:
+        lines.append(f"## {name}")
+        lines.append("")
+        for r in buckets[name]:
+            title = (r.get("title") or "").strip()
+            company = (r.get("company") or "").strip()
+            card = f"{title} — {company}".strip(" —")
+            lines.append(f"- [ ] {card}")
+        lines.append("")
+    lines.append("")
+    lines.append(settings_block)
+    lines.append("")
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    tmp = output.with_name(output.name + ".tmp")
+    tmp.write_text("\n".join(lines), encoding="utf-8")
+    tmp.replace(output)
+    return len(kept)
+
+
+
+def cmd_kanban(args) -> int:
+    db = Path(args.db)
+    if not db.exists():
+        print(_missing_index(db), file=sys.stderr)
+        return 1
+    output = _kanban_path(args)
+    try:
+        count = export_kanban(args, output)
+    except (OSError, sqlite3.Error) as err:
+        print(f"cannot write {output}: {err}", file=sys.stderr)
+        return 1
+    print(f"{count} card(s) -> {output}")
     return 0
 
 
@@ -805,6 +979,25 @@ def main(argv=None) -> int:
     )
     p_review.set_defaults(func=cmd_review)
 
+    p_export = sub.add_parser(
+        "export",
+        help="write <data-dir>/survivors.csv: every kept row, for the resume step",
+    )
+    p_export.add_argument(
+        "--output",
+        help="output path (default: <data-dir>/survivors.csv); overwrites every run",
+    )
+    p_export.set_defaults(func=cmd_export)
+
+    p_kanban = sub.add_parser(
+        "kanban",
+        help="write the kanban.nvim board (one-way overwrite) from kept rows",
+    )
+    p_kanban.add_argument(
+        "--kanban",
+        help="output path (default: ~/notes/.../application-process/kanban.md)",
+    )
+    p_kanban.set_defaults(func=cmd_kanban)
     args = ap.parse_args(argv)
     return args.func(args)
 
