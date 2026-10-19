@@ -137,7 +137,7 @@ provenance on the right.
 
 `space` cycles the decision, `y`/`x` set keep/false-positive directly, and one
 key per application status (`a` applied, `i` interview, `o` offer, `r` rejected,
-`w` withdrawn, `0`/`n` none). They are orthogonal: a false positive is a row
+`w` withdrawn, `0` none). They are orthogonal: a false positive is a row
 never worth applying to; `rejected` is an employer declining an application.
 
 ### Setup
